@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Acompanhar pedido · Minionários</title>
+  <meta name="theme-color" content="#ffd43b" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .top { background: var(--yellow); padding: 16px; }
+    .top a { color: var(--ink); text-decoration: none; font-weight: 800; }
+    .top h1 { font-family: var(--display); font-weight: 400; margin: 8px 0 0; color: var(--blue); font-size: 28px; }
+    .content { padding: 16px; }
+  </style>
+</head>
+<body>
+  <div class="top"><div class="wrap"><a href="/">‹ Voltar ao cardápio</a><h1>Acompanhar pedido</h1></div></div>
+  <div class="wrap content" id="app"></div>
+  <div class="toast" id="toast"></div>
+  <script>
+  (() => {
+    const $ = (s) => document.querySelector(s);
+    const brl = (c) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    const fmtTime = (iso) => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const mine = (() => { try { return JSON.parse(localStorage.getItem('mn_orders')) || []; } catch { return []; } })();
+    let statuses = [];
+    let timer;
+    const code = new URLSearchParams(location.search).get('c');
+
+    function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2000); }
+
+    function orderCard(o) {
+      const cancelled = o.status === 'cancelado';
+      const idx = statuses.findIndex((s) => s.key === o.status);
+      const at = Object.fromEntries(o.events.map((e) => [e.status, e.created_at]));
+      return `
+        <div class="card center">
+          <p class="muted" style="margin:0">Pedido de ${esc(o.customer_name)}</p>
+          <div class="bignum">#${esc(o.number)}</div>
+          <span class="pill ${o.status}">${o.status_info.emoji} ${esc(o.status_info.label)}</span>
+        </div>
+        ${cancelled ? '<div class="notice closed"><span>❌</span><span>Este pedido foi cancelado. Em caso de dúvida, fale com a equipe no WhatsApp.</span></div>' : `
+        <div class="card"><ul class="timeline">
+          ${statuses.map((s, i) => `<li class="${i < idx ? 'done' : i === idx ? 'current' : ''}"><span class="dot">${s.emoji}</span><div><b>${esc(s.label)}</b>${at[s.key] ? `<small>${fmtTime(at[s.key])}</small>` : ''}</div></li>`).join('')}
+        </ul></div>`}
+        ${!o.has_receipt && o.status === 'pedido_feito' ? `
+        <label class="upload" style="margin-bottom:12px"><span class="ico">📎</span><span style="flex:1"><b>Enviar comprovante do Pix</b><br /><span class="small muted">Ainda não recebemos o comprovante deste pedido</span></span>
+          <input type="file" id="rc" accept="image/*,application/pdf" /></label>` : ''}
+        <div class="card">
+          ${o.items.map((l) => `<div class="line"><div class="nm">${l.qty}x ${esc(l.name)}</div><b>${brl(l.subtotal_cents)}</b></div>`).join('')}
+          <div class="total"><span>Total (Pix)</span><span>${brl(o.total_cents)}</span></div>
+        </div>
+        <p class="small muted center">Esta página atualiza sozinha. Feito em ${fmtTime(o.created_at)}.</p>`;
+    }
+
+    async function showOrder(c) {
+      const r = await fetch('/api/orders/' + encodeURIComponent(c));
+      if (!r.ok) { $('#app').innerHTML = '<p class="err center">Pedido não encontrado.</p>' + lookupForm(); bindLookup(); return; }
+      const { order } = await r.json();
+      $('#app').innerHTML = orderCard(order);
+      const rc = $('#rc');
+      if (rc) rc.onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const fd = new FormData(); fd.append('receipt', f);
+        const r2 = await fetch(`/api/orders/${encodeURIComponent(c)}/receipt`, { method: 'POST', body: fd });
+        if (r2.ok) { toast('Comprovante enviado ✓'); showOrder(c); } else toast((await r2.json()).error || 'Erro ao enviar');
+      };
+    }
+
+    function lookupForm() {
+      return `
+        ${mine.length ? `<div class="card"><b>Pedidos feitos neste celular</b>${mine.map((o) => `<div class="line"><div class="nm">Pedido #${esc(o.number)}</div><a class="btn sm light" href="/pedido?c=${encodeURIComponent(o.code)}">Ver</a></div>`).join('')}</div>` : ''}
+        <div class="card">
+          <b>Buscar pelo número</b>
+          <p class="small muted" style="margin:4px 0 12px">Informe o número do pedido e o telefone usado na compra.</p>
+          <label class="field"><span>Número do pedido</span><input class="input" id="num" inputmode="numeric" placeholder="Ex.: 012" /></label>
+          <label class="field"><span>Telefone</span><input class="input" id="tel" type="tel" inputmode="numeric" placeholder="(83) 99999-9999" /></label>
+          <button class="btn block" id="go">Consultar</button>
+          <p class="err" id="err"></p>
+        </div>
+        <div id="results"></div>`;
+    }
+    function bindLookup() {
+      $('#go').onclick = async () => {
+        $('#err').textContent = '';
+        const r = await fetch('/api/orders/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ number: $('#num').value, phone: $('#tel').value }) });
+        const j = await r.json();
+        if (!r.ok) return ($('#err').textContent = j.error);
+        if (j.orders.length === 1) return (location.href = '/pedido?c=' + encodeURIComponent(j.orders[0].code));
+        $('#results').innerHTML = j.orders.map((o) => `<a class="card" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none;color:inherit" href="/pedido?c=${encodeURIComponent(o.code)}"><b>#${esc(o.number)} · ${brl(o.total_cents)}</b><span class="pill ${o.status}">${esc(o.status_info.label)}</span></a>`).join('');
+      };
+    }
+
+    fetch('/api/menu').then((r) => r.json()).then((m) => {
+      statuses = m.statuses;
+      if (code) { showOrder(code); timer = setInterval(() => document.visibilityState === 'visible' && !document.querySelector('#rc:focus') && showOrder(code), 15000); }
+      else { $('#app').innerHTML = lookupForm(); bindLookup(); }
+    });
+  })();
+  </script>
+</body>
+</html>

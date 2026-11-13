@@ -1,0 +1,45 @@
+# Minionários · Noite do Hambúrguer 🍔
+
+Cardápio digital de pré-venda, painel de pedidos e bot de WhatsApp da equipe **Minionários** (Gincana do EJC, Paróquia São Pedro Pescador).
+
+- **Cardápio (mobile first)** — `/`: sacola, dados do cliente, Pix (QR Code com valor + copia e cola), envio do comprovante e número de pedido sequencial (`#001`…`#999`).
+- **Acompanhar pedido** — `/pedido`: linha do tempo do status, atualização automática, envio de comprovante pendente, busca por número + telefone.
+- **Painel admin** — `/admin`: pedidos em tempo real (aviso sonoro), filtros por status, avanço de status em 1 toque, visualização do comprovante, pedido manual, resumo de vendas/produção, exportação CSV, edição do cardápio (fotos, preços, visibilidade) e configurações (Pix, textos, abrir/fechar pré-venda).
+- **Bot WhatsApp (Evolution API)** — só responde mensagens recebidas: faz pedido pelo chat, envia QR Code + Pix copia e cola, recebe o comprovante (foto/PDF) e consulta status.
+
+Status: `Pedido feito → Pagamento confirmado → Em preparo → Saiu para a entrega → Concluído` (+ `Cancelado`).
+
+## Rodando
+
+```bash
+npm install
+ADMIN_PASSWORD=senha npm start   # http://localhost:3000
+```
+
+### Variáveis de ambiente
+
+| Variável | Descrição |
+|---|---|
+| `ADMIN_PASSWORD` | Senha do painel `/admin` (obrigatória) |
+| `PUBLIC_URL` | URL pública, ex.: `https://minionarios.lucasfm10.com.br` (links e webhook) |
+| `EVOLUTION_URL` | URL da Evolution API v2 |
+| `EVOLUTION_API_KEY` | API key global da Evolution |
+| `EVOLUTION_INSTANCE` | Nome da instância (padrão `minionarios`) |
+| `WEBHOOK_SECRET` | Token do webhook (opcional; derivado das outras chaves se ausente) |
+| `DATA_DIR` | Pasta do SQLite e uploads (padrão `./data`; no Docker `/app/data` — monte um volume) |
+
+### WhatsApp
+
+1. Configure as variáveis da Evolution e abra **Admin › WhatsApp**.
+2. Clique **Criar instância** (cria a instância e registra o webhook `PUBLIC_URL/api/whatsapp/webhook`).
+3. Clique **Mostrar QR Code** e leia com o WhatsApp da equipe (Aparelhos conectados).
+
+## Deploy
+
+`Dockerfile` pronto (porta 3000, healthcheck em `/api/health`). No Coolify, use build pack *Dockerfile* e um volume persistente em `/app/data`.
+
+## Testes
+
+```bash
+npm test
+```

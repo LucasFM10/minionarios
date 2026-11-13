@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Minionários · Noite do Hambúrguer</title>
+  <meta name="description" content="Pré-venda da Noite do Hambúrguer da equipe Minionários — Gincana do EJC, Paróquia São Pedro Pescador." />
+  <meta name="theme-color" content="#ffd43b" />
+  <meta property="og:title" content="Minionários · Noite do Hambúrguer 🍔" />
+  <meta property="og:description" content="Faça sua reserva! Pré-venda com retirada no local." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="cover" id="cover"></div>
+  <section class="profile">
+    <div class="wrap">
+      <div class="avatar" id="avatar">🍔</div>
+      <h1 id="teamName">Minionários</h1>
+      <p class="tag" id="tagline"></p>
+      <p class="sub" id="subtitle"></p>
+      <div class="chips">
+        <span class="chip y" id="dateChip">📅</span>
+        <span class="chip" id="pickupChip">📍</span>
+        <span class="chip">🎟️ Pré-venda</span>
+        <span class="chip">💠 Pix</span>
+      </div>
+      <div class="notice" id="notice"><span>📣</span><span id="locationNote"></span></div>
+      <div class="notice closed hidden" id="closedNotice"><span>⛔</span><span>A pré-venda está encerrada no momento. Obrigado pelo carinho!</span></div>
+      <div class="notice hidden" id="myOrders"></div>
+    </div>
+  </section>
+
+  <nav class="catnav"><div class="wrap" id="catnav"></div></nav>
+  <main class="wrap" id="menu"><p class="muted center" style="padding:40px 0">Carregando cardápio…</p></main>
+  <p class="foot wrap">Toda a renda é convertida em alimentos para doação 💛💙<br />EJC · Paróquia São Pedro Pescador · <a href="/pedido">Acompanhar pedido</a></p>
+
+  <div class="bagbar hidden" id="bagbar">
+    <button class="btn" id="openBag"><span><span class="count" id="bagCount">0</span>&nbsp; Ver sacola</span><span id="bagTotal">R$ 0,00</span></button>
+  </div>
+
+  <div class="sheet-bg hidden" id="sheetBg"></div>
+  <section class="sheet hidden" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <header>
+      <button class="iconbtn" id="sheetBack" aria-label="Voltar">‹</button>
+      <h2 id="sheetTitle">Sacola</h2>
+      <button class="iconbtn" id="sheetClose" aria-label="Fechar">×</button>
+    </header>
+    <div class="steps" id="steps"><i></i><i></i><i></i></div>
+    <div class="body" id="sheetBody"></div>
+    <footer id="sheetFoot"></footer>
+  </section>
+
+  <div class="toast" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

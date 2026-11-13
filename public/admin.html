@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Painel · Minionários</title>
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#1f4e9c" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <section id="login" class="login hidden">
+    <form class="card" id="loginForm">
+      <div class="avatar" style="margin:0 auto 8px">🔐</div>
+      <h1 class="center" style="font-family:var(--display);font-weight:400;color:var(--blue);margin:0 0 12px">Painel Minionários</h1>
+      <label class="field"><span>Senha</span><input class="input" type="password" id="pw" autocomplete="current-password" required /></label>
+      <button class="btn block">Entrar</button>
+      <p class="err" id="loginErr"></p>
+    </form>
+  </section>
+
+  <div id="appRoot" class="hidden">
+    <header class="topbar">
+      <div class="tb-in">
+        <b class="brand">🍔 Minionários</b>
+        <nav class="tabs" id="tabs">
+          <button data-tab="orders" class="on">Pedidos</button>
+          <button data-tab="summary">Resumo</button>
+          <button data-tab="products">Cardápio</button>
+          <button data-tab="settings">Configurações</button>
+          <button data-tab="whatsapp">WhatsApp</button>
+        </nav>
+        <button class="btn sm light" id="logout">Sair</button>
+      </div>
+    </header>
+
+    <main class="admin">
+      <section data-panel="orders">
+        <div class="toolbar">
+          <div class="filters" id="filters"></div>
+          <div class="tools">
+            <input class="input" id="q" placeholder="Buscar nº, nome ou telefone" />
+            <button class="btn sm" id="newOrder">+ Pedido manual</button>
+            <a class="btn sm light" href="/api/admin/export.csv">Exportar CSV</a>
+          </div>
+        </div>
+        <div class="grid" id="orders"></div>
+      </section>
+
+      <section data-panel="summary" class="hidden"><div id="summary"></div></section>
+
+      <section data-panel="products" class="hidden">
+        <div class="toolbar"><h2>Itens do cardápio</h2><button class="btn sm" id="addProduct">+ Novo item</button></div>
+        <div class="grid" id="products"></div>
+      </section>
+
+      <section data-panel="settings" class="hidden"><form id="settingsForm" class="settings"></form></section>
+
+      <section data-panel="whatsapp" class="hidden"><div id="wa" class="settings"></div></section>
+    </main>
+  </div>
+
+  <dialog id="modal"><div id="modalBody"></div></dialog>
+  <div class="toast" id="toast"></div>
+  <script src="/admin.js"></script>
+</body>
+</html>

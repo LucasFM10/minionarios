@@ -1,0 +1,22 @@
+{
+  "name": "minionarios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cardápio digital, painel de pedidos e bot de WhatsApp da equipe Minionários (EJC - Paróquia São Pedro Pescador)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^13.1.1",
+    "express": "^4.22.3",
+    "multer": "^2.0.2",
+    "qrcode": "^1.5.4"
+  }
+}
