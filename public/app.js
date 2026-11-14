@@ -7,12 +7,14 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   };
 
-  let S = {}; // settings
+  let S = {};
   let products = [];
   let cart = ls.get('mn_cart', {}); // { productId: qty }
   let notes = '';
   let customer = ls.get('mn_customer', { name: '', phone: '' });
-  let step = 0; // 0 sacola, 1 dados, 2 pix, 3 sucesso
+  let step = 0; // 0 sacola, 1 dados, 2 pix, 3 sucesso, 'product'
+  let current = null; // product open in detail sheet
+  let draftQty = 1;
   let pix = null;
   let receipt = null;
   let sending = false;
@@ -24,6 +26,9 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(() => t.classList.remove('on'), 1800);
   }
+
+  const picStyle = (p) => (p.image ? `background-image:url('${p.image}')` : '');
+  const picInner = (p) => (p.image ? '' : esc(p.emoji));
 
   // ---------- menu ----------
   async function load() {
@@ -38,94 +43,82 @@
   }
 
   function renderHeader() {
-    document.title = `${S.team_name} · Noite do Hambúrguer`;
+    document.title = `${S.team_name} Burger`;
     $('#teamName').textContent = S.team_name;
-    $('#tagline').textContent = S.tagline;
-    $('#subtitle').textContent = S.subtitle;
-    $('#dateChip').textContent = '📅 ' + S.event_date_label;
-    $('#pickupChip').textContent = '📍 ' + S.pickup_label;
+    $('#tagline').textContent = [S.tagline, S.subtitle].filter(Boolean).join(' ');
+    $('#dateChip').textContent = S.event_date_label;
+    $('#pickupChip').textContent = S.pickup_label;
     const ig = S.instagram ? `<a href="https://instagram.com/${encodeURIComponent(S.instagram)}" target="_blank" rel="noopener">@${esc(S.instagram)}</a>` : '';
-    $('#locationNote').innerHTML = esc(S.location_note).replace('@' + esc(S.instagram), ig) || ig;
-    if (S.avatar_image) {
-      $('#avatar').style.backgroundImage = `url('${S.avatar_image}')`;
-      $('#avatar').textContent = '';
-    }
-    if (S.cover_image) $('#cover').style.backgroundImage = `url('${S.cover_image}')`;
+    let note = esc(S.location_note);
+    if (S.instagram && note.includes('@' + esc(S.instagram))) note = note.replace('@' + esc(S.instagram), ig);
+    else if (ig) note += ` ${ig}`;
+    $('#locationNote').innerHTML = `<b>${esc(S.pickup_label)}:</b> ${note}`;
+    if (S.avatar_image) { $('#avatar').style.backgroundImage = `url('${S.avatar_image}')`; $('#avatar').textContent = ''; }
+    if (S.cover_image) { $('#cover').style.backgroundImage = `url('${S.cover_image}')`; $('#cover').classList.remove('empty'); }
     $('#closedNotice').classList.toggle('hidden', S.accepting_orders);
   }
 
+  function qtyDot(id) {
+    return cart[id] ? `<span class="qty-dot">${cart[id]}</span>` : '';
+  }
+
   function renderMenu() {
+    const featured = products.filter((p) => p.featured);
     const cats = [...new Set(products.map((p) => p.category))];
-    $('#catnav').innerHTML = cats.map((c, i) => `<button data-cat="${i}" class="${i === 0 ? 'on' : ''}">${esc(c)}</button>`).join('');
-    $('#menu').innerHTML = cats
-      .map(
-        (c, i) => `<h2 class="cat-title" id="cat-${i}">${esc(c)}</h2>` +
-          products.filter((p) => p.category === c).map((p) => `
-          <article class="product" data-id="${p.id}">
-            <div class="info">
-              <h3>${esc(p.name)}</h3>
-              <p>${esc(p.description)}</p>
-              <span class="price">${brl(p.price_cents)}</span>
-            </div>
-            <div class="pic" style="${p.image ? `background-image:url('${p.image}')` : ''}">${p.image ? '' : esc(p.emoji)}
-              ${S.accepting_orders ? `<div class="stepper" data-stepper="${p.id}"></div>` : ''}
-            </div>
-          </article>`).join('')
-      )
-      .join('');
-    products.forEach((p) => paintStepper(p.id));
+    const sections = [];
+    if (featured.length) sections.push({ title: 'Destaques', html: `<div class="featured">${featured.map((p) => `
+      <div class="fcard" data-open="${p.id}">
+        <div class="pic" style="${picStyle(p)}">${picInner(p)}${p.badge ? `<span class="badge-sel">${esc(p.badge)}</span>` : ''}${qtyDot(p.id)}</div>
+        <div class="price">${brl(p.price_cents)}</div>
+        <div class="nm">${esc(p.name)}</div>
+      </div>`).join('')}</div>` });
+    for (const c of cats) {
+      sections.push({ title: c, html: products.filter((p) => p.category === c).map((p) => `
+        <article class="row" data-open="${p.id}">
+          <div class="info">
+            <h3>${esc(p.name)}</h3>
+            ${p.description ? `<p>${esc(p.description)}</p>` : '<p></p>'}
+            <span class="price">${brl(p.price_cents)}</span>
+          </div>
+          <div class="pic" style="${picStyle(p)}">${picInner(p)}${qtyDot(p.id)}</div>
+        </article>`).join('') });
+    }
+    $('#catnav').innerHTML = sections.map((s, i) => `<button data-cat="${i}" class="${i === 0 ? 'on' : ''}">${esc(s.title)}</button>`).join('');
+    $('#menu').innerHTML = sections.map((s, i) => `<h2 class="cat-title" id="cat-${i}">${esc(s.title)}</h2>${s.html}`).join('');
     $('#catnav').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
       const el = $('#cat-' + b.dataset.cat);
-      window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - 60, behavior: 'smooth' });
+      window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - 70, behavior: 'smooth' });
     };
-    const heads = cats.map((_, i) => $('#cat-' + i));
+    const heads = sections.map((_, i) => $('#cat-' + i));
     window.onscroll = () => {
       let cur = 0;
-      heads.forEach((h, i) => { if (h.getBoundingClientRect().top < 90) cur = i; });
-      document.querySelectorAll('#catnav button').forEach((b, i) => b.classList.toggle('on', i === cur));
+      heads.forEach((h, i) => { if (h.getBoundingClientRect().top < 110) cur = i; });
+      document.querySelectorAll('#catnav button').forEach((b, i) => {
+        const on = i === cur;
+        if (on && !b.classList.contains('on')) b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+        b.classList.toggle('on', on);
+      });
     };
   }
 
-  function stepperHTML(id) {
-    const q = cart[id] || 0;
-    return `<button class="minus" data-dec="${id}" aria-label="Remover">−</button><span class="q">${q}</span><button class="plus" data-inc="${id}" aria-label="Adicionar">+</button>`;
-  }
-  function paintStepper(id) {
-    document.querySelectorAll(`[data-stepper="${id}"]`).forEach((el) => {
-      el.innerHTML = stepperHTML(id);
-      el.classList.toggle('single', !cart[id]);
-    });
-  }
-
-  function changeQty(id, d) {
-    const p = products.find((x) => x.id === +id);
-    if (!p) return;
-    const q = Math.max(0, Math.min(50, (cart[id] || 0) + d));
-    if (q) cart[id] = q; else delete cart[id];
-    ls.set('mn_cart', cart);
-    paintStepper(id);
-    renderBag();
-    if (d > 0) toast(`${p.name} na sacola 🛍️`);
-    if (!$('#sheet').classList.contains('hidden') && step === 0) renderSheet();
-  }
-
-  document.addEventListener('click', (e) => {
-    const inc = e.target.closest('[data-inc]');
-    const dec = e.target.closest('[data-dec]');
-    if (inc) { e.stopPropagation(); changeQty(inc.dataset.inc, +1); }
-    else if (dec) { e.stopPropagation(); changeQty(dec.dataset.dec, -1); }
-    else if (S.accepting_orders) {
-      const card = e.target.closest('.product');
-      if (card && !cart[card.dataset.id]) changeQty(card.dataset.id, +1);
-    }
+  $('#menu').addEventListener('click', (e) => {
+    const card = e.target.closest('[data-open]');
+    if (!card) return;
+    const p = products.find((x) => x.id === +card.dataset.open);
+    if (p) openProduct(p);
   });
 
-  const cartLines = () =>
-    Object.entries(cart)
-      .map(([id, qty]) => ({ p: products.find((x) => x.id === +id), qty }))
-      .filter((l) => l.p);
+  function setQty(id, q) {
+    q = Math.max(0, Math.min(50, q));
+    if (q) cart[id] = q; else delete cart[id];
+    ls.set('mn_cart', cart);
+    renderMenu();
+    renderBag();
+  }
+
+  const cartLines = () => Object.entries(cart).map(([id, qty]) => ({ p: products.find((x) => x.id === +id), qty })).filter((l) => l.p);
   const cartTotal = () => cartLines().reduce((s, l) => s + l.p.price_cents * l.qty, 0);
   const cartCount = () => cartLines().reduce((s, l) => s + l.qty, 0);
 
@@ -141,21 +134,24 @@
     const box = $('#myOrders');
     if (!mine.length) return box.classList.add('hidden');
     box.classList.remove('hidden');
-    box.innerHTML = `<span>🧾</span><span>Seus pedidos: ${mine
-      .slice(0, 4)
-      .map((o) => `<a href="/pedido?c=${encodeURIComponent(o.code)}">#${esc(o.number)}</a>`)
-      .join(' · ')} — toque para acompanhar.</span>`;
+    box.innerHTML = `🧾 Seus pedidos: ${mine.slice(0, 4).map((o) => `<a href="/pedido?c=${encodeURIComponent(o.code)}">#${esc(o.number)}</a>`).join(' · ')} — toque para acompanhar.`;
   }
 
   // ---------- sheet ----------
-  function openSheet(s = 0) {
-    step = s;
+  function showSheet() {
     $('#sheetBg').classList.remove('hidden');
     $('#sheet').classList.remove('hidden');
     requestAnimationFrame(() => { $('#sheetBg').classList.add('on'); $('#sheet').classList.add('on'); });
     document.body.style.overflow = 'hidden';
+    if (!history.state?.sheet) history.pushState({ sheet: true }, '');
+  }
+  function openSheet(s = 0) { step = s; showSheet(); renderSheet(); }
+  function openProduct(p) {
+    current = p;
+    draftQty = cart[p.id] || 1;
+    step = 'product';
+    showSheet();
     renderSheet();
-    history.pushState({ sheet: true }, '');
   }
   function closeSheet(fromPop) {
     $('#sheetBg').classList.remove('on');
@@ -169,9 +165,10 @@
   $('#openBag').onclick = () => openSheet(0);
   $('#sheetClose').onclick = () => closeSheet();
   $('#sheetBg').onclick = () => closeSheet();
-  $('#sheetBack').onclick = () => (step > 0 && step < 3 ? (step--, renderSheet()) : closeSheet());
+  $('#sheetBack').onclick = () => (typeof step === 'number' && step > 0 && step < 3 ? (step--, renderSheet()) : closeSheet());
 
   function renderSheet() {
+    if (step === 'product') return renderProduct();
     const titles = ['Sua sacola', 'Seus dados', 'Pagamento via Pix', 'Pedido enviado!'];
     $('#sheetTitle').textContent = titles[step];
     $('#steps').classList.toggle('hidden', step === 3);
@@ -179,6 +176,41 @@
     $('#sheetBack').style.visibility = step === 3 ? 'hidden' : 'visible';
     $('#sheetBody').scrollTop = 0;
     [renderCartStep, renderDataStep, renderPixStep, renderDoneStep][step]();
+  }
+
+  function renderProduct() {
+    const p = current;
+    const inCart = !!cart[p.id];
+    $('#sheetTitle').textContent = '';
+    $('#steps').classList.add('hidden');
+    $('#sheetBack').style.visibility = 'hidden';
+    $('#sheetBody').scrollTop = 0;
+    $('#sheetBody').innerHTML = `
+      <div class="pd-pic" style="${picStyle(p)}">${picInner(p)}</div>
+      <h3 class="pd-name">${esc(p.name)}</h3>
+      ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ''}
+      <div class="pd-price">${brl(p.price_cents)}</div>
+      ${S.accepting_orders ? `<div class="qty-big"><button id="qm" aria-label="Menos">−</button><b id="qv">${draftQty}</b><button id="qp" aria-label="Mais">+</button></div>` : '<p class="closed">Pré-venda encerrada.</p>'}`;
+    if (!S.accepting_orders) { $('#sheetFoot').innerHTML = ''; return; }
+    const min = inCart ? 0 : 1;
+    const paint = () => {
+      $('#qv').textContent = draftQty;
+      $('#addBtn').textContent = draftQty === 0 ? 'Remover da sacola' : `${inCart ? 'Atualizar' : 'Adicionar'} · ${brl(p.price_cents * draftQty)}`;
+      $('#addBtn').classList.toggle('danger', draftQty === 0);
+    };
+    $('#sheetFoot').innerHTML = `<button class="btn block" id="addBtn"></button>`;
+    $('#qm').onclick = () => { draftQty = Math.max(min, draftQty - 1); paint(); };
+    $('#qp').onclick = () => { draftQty = Math.min(50, draftQty + 1); paint(); };
+    $('#addBtn').onclick = () => {
+      setQty(p.id, draftQty);
+      closeSheet();
+      toast(draftQty ? `${p.name} na sacola 🛍️` : `${p.name} removido`);
+    };
+    paint();
+  }
+
+  function stepperHTML(id) {
+    return `<div class="stepper"><button data-dec="${id}" aria-label="Remover">−</button><span class="q">${cart[id] || 0}</span><button data-inc="${id}" aria-label="Adicionar">+</button></div>`;
   }
 
   function renderCartStep() {
@@ -192,7 +224,7 @@
     $('#sheetBody').innerHTML = `
       <div class="card">
         ${lines.map((l) => `<div class="line"><div class="nm">${esc(l.p.name)}<small>${brl(l.p.price_cents)} cada</small></div>
-          <div class="stepper" data-stepper="${l.p.id}">${stepperHTML(l.p.id)}</div>
+          ${stepperHTML(l.p.id)}
           <b style="min-width:76px;text-align:right">${brl(l.p.price_cents * l.qty)}</b></div>`).join('')}
         <div class="total"><span>Total</span><span>${brl(cartTotal())}</span></div>
       </div>
@@ -200,6 +232,12 @@
         <textarea class="input" id="notes" maxlength="300" placeholder="Ex.: sem cebola, sem molho…">${esc(notes)}</textarea></label>
       <div class="notice"><span>📍</span><span>${esc(S.pickup_label)} · ${esc(S.event_date_label)}. ${esc(S.location_note)}</span></div>`;
     $('#notes').oninput = (e) => (notes = e.target.value);
+    $('#sheetBody').onclick = (e) => {
+      const inc = e.target.closest('[data-inc]');
+      const dec = e.target.closest('[data-dec]');
+      if (inc) { setQty(inc.dataset.inc, (cart[inc.dataset.inc] || 0) + 1); renderSheet(); }
+      if (dec) { setQty(dec.dataset.dec, (cart[dec.dataset.dec] || 0) - 1); renderSheet(); }
+    };
     $('#sheetFoot').innerHTML = `<button class="btn block" id="next">Continuar · ${brl(cartTotal())}</button>`;
     $('#next').onclick = () => { step = 1; renderSheet(); };
   }
@@ -212,6 +250,7 @@
   }
 
   function renderDataStep() {
+    $('#sheetBody').onclick = null;
     $('#sheetBody').innerHTML = `
       <p class="muted" style="margin-top:0">Usamos esses dados para identificar seu pedido na retirada.</p>
       <label class="field"><span>Nome completo</span><input class="input" id="name" autocomplete="name" maxlength="80" value="${esc(customer.name)}" placeholder="Seu nome" /></label>
@@ -245,12 +284,13 @@
   }
 
   function renderPixStep() {
+    $('#sheetBody').onclick = null;
     $('#sheetBody').innerHTML = `
       <div class="card">
         <div class="amount"><span class="muted small">Valor do pedido</span><b>${brl(pix.total_cents)}</b></div>
         <img class="qr" src="${pix.qr}" alt="QR Code Pix" />
         <p class="center small muted" style="margin:0 0 12px">Recebedor: <b>${esc(S.pix_name)}</b> · Chave: ${esc(S.pix_key)}</p>
-        <div class="copybox"><code id="pixCode">${esc(pix.payload)}</code><button class="btn sm yellow" id="copy">Copiar</button></div>
+        <div class="copybox"><code>${esc(pix.payload)}</code><button class="btn sm yellow" id="copy">Copiar</button></div>
       </div>
       <div class="card">
         <ol class="howto">
@@ -260,24 +300,18 @@
           <li><span>Volte aqui, <b>anexe o comprovante</b> e envie o pedido.</span></li>
         </ol>
       </div>
-      <label class="upload ${receipt ? 'ok' : ''}" id="up">
+      <label class="upload ${receipt ? 'ok' : ''}">
         <span class="thumb ${receipt ? '' : 'hidden'}" id="thumb"></span>
         <span class="ico ${receipt ? 'hidden' : ''}">📎</span>
-        <span style="flex:1"><b id="upTitle">${receipt ? 'Comprovante anexado' : 'Anexar comprovante'}</b><br /><span class="small muted" id="upSub">${receipt ? esc(receipt.name) + ' · toque para trocar' : 'Foto, print ou PDF do Pix'}</span></span>
+        <span style="flex:1"><b>${receipt ? 'Comprovante anexado' : 'Anexar comprovante'}</b><br /><span class="small muted">${receipt ? esc(receipt.name) + ' · toque para trocar' : 'Foto, print ou PDF do Pix'}</span></span>
         <input type="file" id="file" accept="image/*,application/pdf" />
       </label>
       <p class="err" id="err"></p>`;
     if (receipt && receipt.type.startsWith('image/')) $('#thumb').style.backgroundImage = `url('${URL.createObjectURL(receipt)}')`;
     $('#copy').onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(pix.payload);
-      } catch {
+      try { await navigator.clipboard.writeText(pix.payload); } catch {
         const ta = document.createElement('textarea');
-        ta.value = pix.payload;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
+        ta.value = pix.payload; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
       }
       $('#copy').textContent = 'Copiado ✓';
       toast('Código Pix copiado! Cole no app do banco.');
@@ -314,9 +348,7 @@
       mine.unshift({ code: j.order.code, number: j.order.number });
       ls.set('mn_orders', mine.slice(0, 20));
       window.__lastOrder = j.order;
-      cart = {};
-      notes = '';
-      receipt = null;
+      cart = {}; notes = ''; receipt = null;
       ls.set('mn_cart', cart);
       step = 3;
       renderSheet();

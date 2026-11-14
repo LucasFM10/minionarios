@@ -79,7 +79,7 @@ const statusInfo = (key) => ALL_STATUSES.find((s) => s.key === key) || { key, la
 
 const DEFAULT_SETTINGS = {
   team_name: 'Minionários',
-  tagline: 'Noite do Hambúrguer · Gincana do EJC',
+  tagline: 'Noite do Hambúrguer · EJC',
   subtitle: 'Paróquia São Pedro Pescador',
   event_date_label: 'Quinta, 19 de novembro',
   pickup_label: 'Retirada no local',
@@ -101,6 +101,16 @@ const DEFAULT_SETTINGS = {
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 
+// ---- migrations ----
+const productCols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
+if (!productCols.includes('featured')) db.exec('ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0');
+if (!productCols.includes('badge')) db.exec("ALTER TABLE products ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
+db.prepare("UPDATE settings SET value = 'Noite do Hambúrguer · EJC' WHERE key = 'tagline' AND value = 'Noite do Hambúrguer · Gincana do EJC'").run();
+function getSettingRaw(k) {
+  const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(k);
+  return r ? r.value : null;
+}
+
 function getSettings() {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
@@ -121,6 +131,13 @@ if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n === 0) {
   ];
   const ins = db.prepare('INSERT INTO products (name, description, price_cents, category, emoji, sort) VALUES (?, ?, ?, ?, ?, ?)');
   seed.forEach((p, i) => ins.run(...p, i + 1));
+}
+
+if (!getSettingRaw('migr_featured_v1')) {
+  db.prepare("UPDATE products SET featured = 1, badge = 'Mais completo' WHERE name = 'Combo Fominion'").run();
+  db.prepare("UPDATE products SET featured = 1, badge = 'Pra dividir' WHERE name = 'Combo Minion Duplo'").run();
+  db.prepare("UPDATE products SET description = 'Lata' WHERE name = 'Coca-Cola' AND description = ''").run();
+  insertSetting.run('migr_featured_v1', '1');
 }
 
 // ---------- Orders ----------

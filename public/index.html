@@ -3,40 +3,40 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Minionários · Noite do Hambúrguer</title>
-  <meta name="description" content="Pré-venda da Noite do Hambúrguer da equipe Minionários — Gincana do EJC, Paróquia São Pedro Pescador." />
-  <meta name="theme-color" content="#ffd43b" />
-  <meta property="og:title" content="Minionários · Noite do Hambúrguer 🍔" />
-  <meta property="og:description" content="Faça sua reserva! Pré-venda com retirada no local." />
+  <title>Minionários Burger</title>
+  <meta name="description" content="Pré-venda da Noite do Hambúrguer da equipe Minionários — EJC, Paróquia São Pedro Pescador." />
+  <meta name="theme-color" content="#ffd12e" />
+  <meta property="og:title" content="Minionários Burger 🍔" />
+  <meta property="og:description" content="Faça sua reserva! Pré-venda da Noite do Hambúrguer." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="cover" id="cover"></div>
-  <section class="profile">
-    <div class="wrap">
-      <div class="avatar" id="avatar">🍔</div>
-      <h1 id="teamName">Minionários</h1>
-      <p class="tag" id="tagline"></p>
-      <p class="sub" id="subtitle"></p>
-      <div class="chips">
-        <span class="chip y" id="dateChip">📅</span>
-        <span class="chip" id="pickupChip">📍</span>
-        <span class="chip">🎟️ Pré-venda</span>
-        <span class="chip">💠 Pix</span>
-      </div>
-      <div class="notice" id="notice"><span>📣</span><span id="locationNote"></span></div>
-      <div class="notice closed hidden" id="closedNotice"><span>⛔</span><span>A pré-venda está encerrada no momento. Obrigado pelo carinho!</span></div>
-      <div class="notice hidden" id="myOrders"></div>
+  <div class="cover empty" id="cover"></div>
+  <section class="profile-card">
+    <div class="avatar" id="avatar">🍔</div>
+    <h1 id="teamName">Minionários</h1>
+    <p class="sub" id="tagline"></p>
+    <div class="chips">
+      <span class="chip"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg><span id="dateChip"></span></span>
+      <span class="chip"><svg class="i" viewBox="0 0 24 24"><path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg><span id="pickupChip"></span></span>
+      <span class="chip"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Pré-venda</span>
     </div>
+    <div class="info-box">
+      <span class="pin"><svg class="i" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg></span>
+      <div id="locationNote"></div>
+    </div>
+    <p class="foot-note">Todo o valor arrecadado vira alimento para doação. Obrigado por ajudar!</p>
+    <div class="closed hidden" id="closedNotice">⛔ A pré-venda está encerrada no momento. Obrigado pelo carinho!</div>
+    <div class="my-orders hidden" id="myOrders"></div>
   </section>
 
   <nav class="catnav"><div class="wrap" id="catnav"></div></nav>
-  <main class="wrap" id="menu"><p class="muted center" style="padding:40px 0">Carregando cardápio…</p></main>
-  <p class="foot wrap">Toda a renda é convertida em alimentos para doação 💛💙<br />EJC · Paróquia São Pedro Pescador · <a href="/pedido">Acompanhar pedido</a></p>
+  <main class="wrap menu" id="menu"><p class="muted center" style="padding:40px 0">Carregando cardápio…</p></main>
+  <p class="foot wrap">EJC · Paróquia São Pedro Pescador · <a href="/pedido">Acompanhar pedido</a></p>
 
   <div class="bagbar hidden" id="bagbar">
     <button class="btn" id="openBag"><span><span class="count" id="bagCount">0</span>&nbsp; Ver sacola</span><span id="bagTotal">R$ 0,00</span></button>

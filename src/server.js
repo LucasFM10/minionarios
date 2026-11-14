@@ -106,7 +106,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.get('/api/menu', (req, res) => {
   const products = store.db
-    .prepare('SELECT id, name, description, price_cents, category, emoji, image FROM products WHERE active = 1 ORDER BY sort, id')
+    .prepare('SELECT id, name, description, price_cents, category, emoji, image, featured, badge FROM products WHERE active = 1 ORDER BY sort, id')
     .all()
     .map((p) => ({ ...p, image: p.image ? '/uploads/' + p.image : null }));
   res.json({ settings: publicSettings(store.getSettings()), products, statuses: store.STATUSES });
@@ -284,6 +284,8 @@ function productFields(b) {
   if (b.emoji !== undefined) out.emoji = String(b.emoji).trim().slice(0, 8) || '🍔';
   if (b.active !== undefined) out.active = b.active === true || b.active === 'true' || b.active === '1' || b.active === 1 ? 1 : 0;
   if (b.sort !== undefined) out.sort = parseInt(b.sort, 10) || 0;
+  if (b.featured !== undefined) out.featured = b.featured === true || b.featured === 'true' || b.featured === '1' || b.featured === 1 ? 1 : 0;
+  if (b.badge !== undefined) out.badge = String(b.badge).trim().slice(0, 24);
   if (out.price_cents !== undefined && !(out.price_cents >= 0)) throw new Error('Preço inválido.');
   return out;
 }

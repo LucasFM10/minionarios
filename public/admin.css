@@ -1,13 +1,13 @@
 body { background: #eef1f5; }
 .login { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
 .login .card { width: 100%; max-width: 360px; padding: 24px; }
-.topbar { background: var(--blue); color: #fff; position: sticky; top: 0; z-index: 20; }
+.topbar { background: var(--ink); color: #fff; position: sticky; top: 0; z-index: 20; }
 .tb-in { max-width: 1400px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
-.brand { font-family: var(--display); font-weight: 400; font-size: 20px; letter-spacing: .4px; white-space: nowrap; }
+.brand { font-family: var(--display); font-weight: 800; font-size: 20px; letter-spacing: .4px; white-space: nowrap; }
 .tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { flex: none; border: 0; background: transparent; color: rgba(255,255,255,.75); font-weight: 800; padding: 8px 12px; border-radius: 10px; }
-.tabs button.on { background: rgba(255,255,255,.16); color: #fff; }
+.tabs button.on { background: var(--yellow); color: var(--ink); }
 @media (max-width: 720px) {
   .tb-in { flex-wrap: wrap; }
   .tabs { order: 3; flex-basis: 100%; }
@@ -33,7 +33,7 @@ body { background: #eef1f5; }
 .order.fresh { animation: pulse 1.2s ease 3; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(255,212,59,.7); } }
 .o-head { display: flex; align-items: center; gap: 10px; }
-.o-num { font-family: var(--display); font-size: 30px; color: var(--blue); line-height: 1; }
+.o-num { font-family: var(--display); font-weight: 800; font-size: 30px; color: var(--ink); line-height: 1; }
 .o-head .sp { flex: 1; }
 .o-meta { min-width: 0; font-size: 14px; color: var(--muted); }
 .o-meta b { color: var(--ink); font-size: 16px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -86,3 +86,4 @@ dialog::backdrop { background: rgba(10,15,25,.55); }
 .status-dot.connecting { background: #f0a33a; }
 .status-dot.close, .status-dot.not_created { background: var(--danger); }
 code.k { background: #f1f3f6; padding: 2px 6px; border-radius: 6px; font-size: 13px; word-break: break-all; }
+.login .avatar { position: static; transform: none; margin: 0 auto 8px; }

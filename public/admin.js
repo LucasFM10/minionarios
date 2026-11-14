@@ -260,7 +260,7 @@
       <div class="prod ${p.active ? '' : 'off'}">
         <div class="pic" style="${p.image_url ? `background-image:url('${p.image_url}')` : ''}">${p.image_url ? '' : esc(p.emoji)}</div>
         <div style="flex:1;min-width:0">
-          <h3>${esc(p.name)} ${p.active ? '' : '<span class="badge nr">oculto</span>'}</h3>
+          <h3>${esc(p.name)} ${p.active ? '' : '<span class="badge nr">oculto</span>'} ${p.featured ? `<span class="badge wa">★ ${esc(p.badge || 'destaque')}</span>` : ''}</h3>
           <p>${esc(p.description)}</p>
           <p><b style="color:var(--ink)">${brl(p.price_cents)}</b> · ${esc(p.category)} · ordem ${p.sort}</p>
           <button class="btn sm light" data-edit="${p.id}">Editar</button>
@@ -284,12 +284,15 @@
         <label class="field"><span>Foto</span><input class="input" type="file" name="image" accept="image/*" /></label>
         ${p?.image_url ? `<label class="switch"><input type="checkbox" name="remove_image" value="1" /> Remover foto atual</label>` : ''}
         <label class="switch"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Visível no cardápio</label>
+        <label class="switch"><input type="checkbox" name="featured" ${p?.featured ? 'checked' : ''} /> Mostrar em Destaques</label>
+        <label class="field"><span>Selo do destaque (ex.: Mais completo)</span><input class="input" name="badge" maxlength="24" value="${esc(p?.badge || '')}" /></label>
         <button class="btn block">Salvar</button><p class="err" id="pfErr"></p>
       </form>`);
     $('#pf').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       fd.set('active', e.target.active.checked ? '1' : '0');
+      fd.set('featured', e.target.featured.checked ? '1' : '0');
       if (!fd.get('image')?.size) fd.delete('image');
       try {
         await api(p ? `/api/admin/products/${p.id}` : '/api/admin/products', { method: p ? 'PUT' : 'POST', body: fd });
