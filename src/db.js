@@ -81,13 +81,17 @@ const DEFAULT_SETTINGS = {
   team_name: 'Minionários',
   tagline: 'Noite do Hambúrguer · EJC',
   subtitle: 'Paróquia São Pedro Pescador',
-  event_date_label: 'Quinta, 19 de novembro',
-  pickup_label: 'Retirada no local',
+  event_date_label: 'Qui, 19 de novembro',
+  pickup_label: 'Retirada ou entrega',
+  pickup_address: 'R. Marieta Steimbach Silva, 51 – Miramar',
+  pickup_city: 'João Pessoa - PB',
+  delivery_enabled: '1',
+  delivery_note: 'em João Pessoa, com taxa por bairro a partir de R$ 7,00',
   location_note: 'O local da retirada será divulgado no Instagram @minionarios.pspp',
   instagram: 'minionarios.pspp',
   whatsapp_number: '5583988095199',
   pix_key: '+5583987889174',
-  pix_name: 'TAINARA',
+  pix_name: 'Tainara Salustiano Barbosa',
   pix_city: 'JOAO PESSOA',
   accepting_orders: '1',
   notify_status_whatsapp: '0',
@@ -104,6 +108,10 @@ for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 // ---- migrations ----
 const productCols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
 if (!productCols.includes('featured')) db.exec('ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0');
+const orderCols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
+for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER']]) {
+  if (!orderCols.includes(c)) db.exec(`ALTER TABLE orders ADD COLUMN ${c} ${def}`);
+}
 if (!productCols.includes('badge')) db.exec("ALTER TABLE products ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
 db.prepare("UPDATE settings SET value = 'Noite do Hambúrguer · EJC' WHERE key = 'tagline' AND value = 'Noite do Hambúrguer · Gincana do EJC'").run();
 function getSettingRaw(k) {
@@ -138,6 +146,24 @@ if (!getSettingRaw('migr_featured_v1')) {
   db.prepare("UPDATE products SET featured = 1, badge = 'Pra dividir' WHERE name = 'Combo Minion Duplo'").run();
   db.prepare("UPDATE products SET description = 'Lata' WHERE name = 'Coca-Cola' AND description = ''").run();
   insertSetting.run('migr_featured_v1', '1');
+}
+
+if (!getSettingRaw('migr_original_v2')) {
+  const upd = db.prepare('UPDATE products SET category = ?, sort = ?, image = COALESCE(image, ?), badge = CASE WHEN ? != \'\' THEN ? ELSE badge END, featured = CASE WHEN ? THEN 1 ELSE featured END WHERE name = ?');
+  [
+    ['Combos', 1, '/img/fominion.webp', 'Mais completo', 1, 'Combo Fominion'],
+    ['Combos', 2, '/img/papoi-power.webp', '', 0, 'Combo Papoi Power'],
+    ['Combos', 3, '/img/minion-duplo.webp', 'Pra dividir', 1, 'Combo Minion Duplo'],
+    ['Hambúrguer', 4, '/img/papoiburg.webp', 'O clássico', 1, 'Papoiburg'],
+    ['Acompanhamento', 5, '/img/papatata.webp', '', 0, 'Papatata'],
+    ['Bebida', 6, '/img/coca.webp', '', 0, 'Coca-Cola'],
+    ['Sobremesa', 7, '/img/cookies.webp', '', 0, 'Cookies'],
+  ].forEach(([cat, sort, img, badge, feat, name]) => upd.run(cat, sort, img, badge, badge, feat, name));
+  db.prepare("UPDATE products SET description = 'Cookie com gotas de chocolate', price_cents = 800 WHERE name = 'Cookies' AND description = '' AND price_cents = 500").run();
+  db.prepare("UPDATE settings SET value = 'Qui, 19 de novembro' WHERE key = 'event_date_label' AND value = 'Quinta, 19 de novembro'").run();
+  db.prepare("UPDATE settings SET value = 'Retirada ou entrega' WHERE key = 'pickup_label' AND value = 'Retirada no local'").run();
+  db.prepare("UPDATE settings SET value = 'Tainara Salustiano Barbosa' WHERE key = 'pix_name' AND value = 'TAINARA'").run();
+  insertSetting.run('migr_original_v2', '1');
 }
 
 // ---------- Orders ----------
@@ -197,8 +223,11 @@ function priceItems(items) {
 }
 
 const createOrderTx = db.transaction((data) => {
-  const { lines, total } = priceItems(data.items);
+  const { lines, total: subtotal } = priceItems(data.items);
   const s = getSettings();
+  const delivery = data.delivery || { mode: 'retirada' };
+  const fee = delivery.mode === 'entrega' ? delivery.fee_cents : 0; // null = a combinar
+  const total = subtotal + (fee || 0);
   let number = parseInt(s.next_order_number, 10) || 1;
   // Skip numbers that already exist (e.g. after a manual counter change).
   const exists = db.prepare('SELECT 1 FROM orders WHERE number = ?');
@@ -207,8 +236,8 @@ const createOrderTx = db.transaction((data) => {
   const code = crypto.randomBytes(9).toString('base64url');
   const info = db
     .prepare(
-      `INSERT INTO orders (number, code, customer_name, phone, items_json, total_cents, notes, source, wa_jid, receipt_path, receipt_mime)
-       VALUES (@number, @code, @customer_name, @phone, @items_json, @total_cents, @notes, @source, @wa_jid, @receipt_path, @receipt_mime)`
+      `INSERT INTO orders (number, code, customer_name, phone, items_json, total_cents, subtotal_cents, notes, source, wa_jid, receipt_path, receipt_mime, delivery_mode, bairro, address, address_ref, delivery_fee_cents)
+       VALUES (@number, @code, @customer_name, @phone, @items_json, @total_cents, @subtotal_cents, @notes, @source, @wa_jid, @receipt_path, @receipt_mime, @delivery_mode, @bairro, @address, @address_ref, @delivery_fee_cents)`
     )
     .run({
       number,
@@ -217,6 +246,12 @@ const createOrderTx = db.transaction((data) => {
       phone: normalizePhone(data.phone),
       items_json: JSON.stringify(lines),
       total_cents: total,
+      subtotal_cents: subtotal,
+      delivery_mode: delivery.mode === 'entrega' ? 'entrega' : 'retirada',
+      bairro: delivery.mode === 'entrega' ? delivery.bairro : null,
+      address: delivery.mode === 'entrega' ? String(delivery.address || '').slice(0, 160) : null,
+      address_ref: delivery.mode === 'entrega' ? String(delivery.ref || '').slice(0, 160) : null,
+      delivery_fee_cents: delivery.mode === 'entrega' ? fee : 0,
       notes: (data.notes || '').trim().slice(0, 300),
       source: data.source || 'site',
       wa_jid: data.wa_jid || null,
@@ -231,7 +266,25 @@ function createOrder(data) {
   if (!data.customer_name || data.customer_name.trim().length < 2) throw new Error('Informe seu nome.');
   const p = normalizePhone(data.phone);
   if (p.length < 12 || p.length > 13) throw new Error('Informe um telefone válido com DDD.');
+  data.delivery = resolveDelivery(data.delivery, data.items);
   return createOrderTx(data);
+}
+
+const BURGER_CATS = ['combos', 'hamburguer', 'hamburgueres', 'lanches'];
+/** Validates delivery info against the bairro table; returns { mode, bairro, fee_cents, address, ref }. */
+function resolveDelivery(d, items) {
+  if (!d || d.mode !== 'entrega') return { mode: 'retirada' };
+  if (getSettings().delivery_enabled !== '1') throw new Error('Entrega indisponível. Escolha retirada no local.');
+  const { findBairro, norm } = require('./bairros');
+  const hasBurger = (items || []).some((it) => {
+    const p = db.prepare('SELECT category FROM products WHERE id = ?').get(Number(it.product_id));
+    return p && BURGER_CATS.includes(norm(p.category));
+  });
+  if (!hasBurger) throw new Error('A entrega vale só para pedidos com pelo menos um hambúrguer ou combo.');
+  const b = findBairro(d.bairro);
+  if (!b) throw new Error('Selecione o seu bairro.');
+  if (!d.address || String(d.address).trim().length < 4) throw new Error('Digite a rua e o número.');
+  return { mode: 'entrega', bairro: b.n, fee_cents: b.fee, address: String(d.address).trim(), ref: String(d.ref || '').trim() };
 }
 
 const getOrderById = (id) => hydrateOrder(db.prepare('SELECT * FROM orders WHERE id = ?').get(id));
@@ -336,6 +389,7 @@ module.exports = {
   formatNumber,
   priceItems,
   createOrder,
+  resolveDelivery,
   getOrderById,
   getOrderByCode,
   getOrderByNumber,

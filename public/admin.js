@@ -145,6 +145,7 @@
         <div class="o-meta"><b>${esc(o.customer_name)}</b>
           <a href="https://wa.me/${esc(o.phone)}" target="_blank" rel="noopener">${esc(phoneFmt(o.phone))}</a> · ${time(o.created_at)}</div>
         <ul class="o-items">${o.items.map((l) => `<li><span>${l.qty}× ${esc(l.name)}</span><span class="muted">${brl(l.subtotal_cents)}</span></li>`).join('')}</ul>
+        ${o.delivery_mode === 'entrega' ? `<div class="o-deliv">🛵 <b>Entrega · ${esc(o.bairro)}</b> — ${esc(o.address)}${o.address_ref ? ` (${esc(o.address_ref)})` : ''}<br><span class="muted">Taxa: ${o.delivery_fee_cents == null ? 'a combinar' : brl(o.delivery_fee_cents)}</span></div>` : `<div class="o-deliv pick">🏠 Retirada no local</div>`}
         ${o.notes ? `<div class="o-notes">📝 ${esc(o.notes)}</div>` : ''}
         <div class="o-foot">
           <span class="o-total">${brl(o.total_cents)}</span>
@@ -313,6 +314,8 @@
         ${sw('accepting_orders', 'Pré-venda aberta (aceitando pedidos)')}
         ${sw('require_receipt', 'Exigir comprovante para enviar pedido pelo site')}
         ${sw('notify_status_whatsapp', 'Avisar o cliente no WhatsApp quando o status mudar')}
+        ${sw('delivery_enabled', 'Oferecer entrega (taxa por bairro)')}
+        ${f('delivery_note', 'Texto da entrega no topo do cardápio')}
         ${f('next_order_number', 'Próximo número de pedido', 'type="number" min="1" max="999"')}
       </fieldset>
       <fieldset><legend>Pix</legend>
@@ -324,7 +327,8 @@
         <div class="row2">${f('team_name', 'Nome da equipe')}${f('instagram', 'Instagram (sem @)')}</div>
         ${f('tagline', 'Chamada')}${f('subtitle', 'Subtítulo')}
         <div class="row2">${f('event_date_label', 'Data')}${f('pickup_label', 'Retirada')}</div>
-        ${f('location_note', 'Aviso de local')}
+        <div class="row2">${f('pickup_address', 'Endereço de retirada')}${f('pickup_city', 'Cidade (para o mapa)')}</div>
+        ${f('location_note', 'Aviso de local (usado se não houver endereço)')}
         ${f('whatsapp_number', 'WhatsApp da equipe (com 55)')}
         <div class="row2">
           <label class="field"><span>Foto de perfil</span><input class="input" type="file" name="avatar" accept="image/*" /></label>

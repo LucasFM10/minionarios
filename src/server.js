@@ -6,6 +6,8 @@ const multer = require('multer');
 const store = require('./db');
 const wa = require('./whatsapp');
 const { buildPixPayload, pixQrDataUrl } = require('./pix');
+const { BAIRROS } = require('./bairros');
+const imgUrl = (i) => (!i ? null : i.startsWith('/') ? i : '/uploads/' + i);
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -78,14 +80,18 @@ const publicSettings = (s) => ({
   event_date_label: s.event_date_label,
   pickup_label: s.pickup_label,
   location_note: s.location_note,
+  pickup_address: s.pickup_address,
+  pickup_city: s.pickup_city,
+  delivery_enabled: s.delivery_enabled === '1',
+  delivery_note: s.delivery_note,
   instagram: s.instagram,
   whatsapp_number: s.whatsapp_number,
   pix_key: s.pix_key,
   pix_name: s.pix_name,
   accepting_orders: s.accepting_orders === '1',
   require_receipt: s.require_receipt === '1',
-  avatar_image: s.avatar_image ? '/uploads/' + s.avatar_image : '',
-  cover_image: s.cover_image ? '/uploads/' + s.cover_image : '',
+  avatar_image: s.avatar_image ? '/uploads/' + s.avatar_image : '/img/perfil.webp',
+  cover_image: s.cover_image ? '/uploads/' + s.cover_image : '/img/capa.webp',
 });
 
 const publicOrder = (o, events) => ({
@@ -94,6 +100,12 @@ const publicOrder = (o, events) => ({
   customer_name: o.customer_name,
   items: o.items,
   total_cents: o.total_cents,
+  subtotal_cents: o.subtotal_cents ?? o.total_cents,
+  delivery_mode: o.delivery_mode,
+  bairro: o.bairro,
+  address: o.address,
+  address_ref: o.address_ref,
+  delivery_fee_cents: o.delivery_fee_cents,
   status: o.status,
   status_info: o.status_info,
   has_receipt: o.has_receipt,
@@ -108,16 +120,19 @@ app.get('/api/menu', (req, res) => {
   const products = store.db
     .prepare('SELECT id, name, description, price_cents, category, emoji, image, featured, badge FROM products WHERE active = 1 ORDER BY sort, id')
     .all()
-    .map((p) => ({ ...p, image: p.image ? '/uploads/' + p.image : null }));
-  res.json({ settings: publicSettings(store.getSettings()), products, statuses: store.STATUSES });
+    .map((p) => ({ ...p, image: imgUrl(p.image) }));
+  res.json({ settings: publicSettings(store.getSettings()), products, statuses: store.STATUSES, bairros: BAIRROS });
 });
 
 app.post('/api/pix', rateLimit(60, 60000), async (req, res) => {
   try {
-    const { total } = store.priceItems(req.body.items);
+    const { total: subtotal } = store.priceItems(req.body.items);
+    const d = store.resolveDelivery(req.body.delivery, req.body.items);
+    const fee = d.mode === 'entrega' ? d.fee_cents : 0;
+    const total = subtotal + (fee || 0);
     const s = store.getSettings();
     const payload = buildPixPayload({ key: s.pix_key, name: s.pix_name, city: s.pix_city, amountCents: total });
-    res.json({ total_cents: total, payload, qr: await pixQrDataUrl(payload) });
+    res.json({ subtotal_cents: subtotal, delivery: d, fee_cents: fee, total_cents: total, payload, qr: await pixQrDataUrl(payload) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -139,6 +154,7 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
       phone: req.body.phone || '',
       notes: req.body.notes || '',
       items,
+      delivery: (() => { try { return JSON.parse(req.body.delivery || 'null'); } catch { return null; } })(),
       source: 'site',
     });
     if (req.file) {
@@ -246,7 +262,7 @@ app.post('/api/admin/orders', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/export.csv', requireAdmin, (req, res) => {
-  const rows = [['numero', 'data', 'nome', 'telefone', 'itens', 'total', 'status', 'origem', 'comprovante', 'observacoes']];
+  const rows = [['numero', 'data', 'nome', 'telefone', 'itens', 'total', 'status', 'origem', 'comprovante', 'observacoes', 'recebimento', 'bairro', 'endereco', 'referencia', 'taxa']];
   for (const o of store.listOrders().reverse()) {
     rows.push([
       o.number_label,
@@ -259,6 +275,11 @@ app.get('/api/admin/export.csv', requireAdmin, (req, res) => {
       o.source,
       o.has_receipt ? 'sim' : 'não',
       o.notes,
+      o.delivery_mode === 'entrega' ? 'entrega' : 'retirada',
+      o.bairro || '',
+      o.address || '',
+      o.address_ref || '',
+      o.delivery_mode === 'entrega' ? (o.delivery_fee_cents == null ? 'a combinar' : (o.delivery_fee_cents / 100).toFixed(2).replace('.', ',')) : '',
     ]);
   }
   const csv = '﻿' + rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
@@ -272,7 +293,7 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
     products: store.db
       .prepare('SELECT * FROM products ORDER BY sort, id')
       .all()
-      .map((p) => ({ ...p, image_url: p.image ? '/uploads/' + p.image : null })),
+      .map((p) => ({ ...p, image_url: imgUrl(p.image) })),
   });
 });
 function productFields(b) {
@@ -323,7 +344,7 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
 const EDITABLE = [
   'team_name', 'tagline', 'subtitle', 'event_date_label', 'pickup_label', 'location_note', 'instagram',
   'whatsapp_number', 'pix_key', 'pix_name', 'pix_city', 'accepting_orders', 'notify_status_whatsapp',
-  'require_receipt', 'next_order_number',
+  'require_receipt', 'next_order_number', 'pickup_address', 'pickup_city', 'delivery_enabled', 'delivery_note',
 ];
 app.get('/api/admin/settings', requireAdmin, (req, res) => {
   const s = store.getSettings();

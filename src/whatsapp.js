@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const store = require('./db');
 const { buildPixPayload, pixQrPng } = require('./pix');
+const { BAIRROS, findBairro, norm: normB } = require('./bairros');
 
 const cfg = () => ({
   url: (process.env.EVOLUTION_URL || '').replace(/\/+$/, ''),
@@ -237,7 +238,7 @@ async function sendPix(jid, order, s) {
   await sendImage(
     jid,
     png,
-    `*Pedido #${order.number_label}* registrado! 🎉\n\n${bagText(order.items.map((l) => ({ ...l })))}\n\n` +
+    `*Pedido #${order.number_label}* registrado! 🎉\n\n${order.delivery_mode === 'entrega' ? bagText(order.items).replace('*Total:', '*Itens:') : bagText(order.items)}${order.delivery_mode === 'entrega' ? `\n🛵 Entrega (${order.bairro}): ${order.delivery_fee_cents == null ? 'taxa a combinar' : brl(order.delivery_fee_cents)}` : ''}\n\n` +
       `💠 Pague *${brl(order.total_cents)}* via Pix (QR Code acima ou o código *copia e cola* da próxima mensagem).\n` +
       `Recebedor: ${s.pix_name} · Chave: ${s.pix_key}`
   );
@@ -349,12 +350,39 @@ async function handleMessage(data) {
         store.saveSession(jid, 'phone', next);
         return reply('E qual o seu *telefone com DDD*? (ex.: 83 99999-9999)');
       }
-      return askConfirm(jid, { ...next, phone: store.normalizePhone(phone) });
+      return afterContact(jid, { ...next, phone: store.normalizePhone(phone) });
     }
     case 'phone': {
       const p = store.normalizePhone(text);
       if (p.length < 12 || p.length > 13) return reply('Telefone inválido. Envie com DDD, ex.: 83 99999-9999');
-      return askConfirm(jid, { ...session.data, phone: p });
+      return afterContact(jid, { ...session.data, phone: p });
+    }
+    case 'mode': {
+      if (t === '1' || t.includes('retir')) return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
+      if (t === '2' || t.includes('entreg') || t.includes('casa')) {
+        store.saveSession(jid, 'bairro', session.data);
+        return reply('🛵 Qual o seu *bairro* em João Pessoa? (ex.: Manaíra)');
+      }
+      return reply('Responda *1* para retirar no local ou *2* para receber em casa.');
+    }
+    case 'bairro': {
+      const cands = session.data.cands || [];
+      let b = /^\d+$/.test(t) && cands[+t - 1] ? findBairro(cands[+t - 1]) : findBairro(text);
+      if (!b) {
+        const q = normB(text);
+        const found = q.length >= 3 ? BAIRROS.filter((x) => normB(x.n).includes(q)) : [];
+        if (found.length === 1) b = found[0];
+        else if (found.length > 1) {
+          store.saveSession(jid, 'bairro', { ...session.data, cands: found.slice(0, 9).map((x) => x.n) });
+          return reply('Qual desses?\n' + found.slice(0, 9).map((x, i) => `*${i + 1}* — ${x.n}`).join('\n'));
+        } else return reply('Não encontrei esse bairro 🤔 Envie o nome do bairro (ex.: *Tambaú*, *Bancários*) ou *1* para voltar e retirar no local.');
+      }
+      store.saveSession(jid, 'address', { ...session.data, cands: undefined, bairro: b.n });
+      return reply(`${b.fee == null ? `📍 *${b.n}* fica a mais de 5 km — a taxa de entrega é combinada com a equipe.` : `📍 Taxa de entrega para *${b.n}*: *${brl(b.fee)}*.`}\n\nAgora envie *rua, número* e um ponto de referência.`);
+    }
+    case 'address': {
+      if (text.length < 4) return reply('Envie a *rua e o número* (e um ponto de referência, se quiser).');
+      return askConfirm(jid, { ...session.data, delivery: { mode: 'entrega', bairro: session.data.bairro, address: text.slice(0, 160) } });
     }
     case 'confirm': {
       if (t === '1' || t === 'sim' || t === 'confirmar') {
@@ -366,6 +394,7 @@ async function handleMessage(data) {
           customer_name: session.data.name,
           phone: session.data.phone,
           items: session.data.bag.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+          delivery: session.data.delivery,
           source: 'whatsapp',
           wa_jid: jid,
         });
@@ -415,11 +444,35 @@ function startOrdering(jid, s, accepting) {
   );
 }
 
+function afterContact(jid, data) {
+  const s = store.getSettings();
+  const burgers = ['combos', 'hamburguer', 'hamburgueres', 'lanches'];
+  const hasBurger = data.bag.some((l) => {
+    const p = store.db.prepare('SELECT category FROM products WHERE id = ?').get(l.product_id);
+    return p && burgers.includes(normB(p.category));
+  });
+  if (s.delivery_enabled === '1' && hasBurger) {
+    store.saveSession(jid, 'mode', data);
+    return sendText(jid, `Como você quer receber?\n\n*1* — Retirar no local (sem taxa)${s.pickup_address ? `\n      _${s.pickup_address}_` : ''}\n*2* — Receber em casa (taxa por bairro)`);
+  }
+  return askConfirm(jid, { ...data, delivery: { mode: 'retirada' } });
+}
+
 function askConfirm(jid, data) {
   store.saveSession(jid, 'confirm', data);
+  const s = store.getSettings();
+  const d = data.delivery || { mode: 'retirada' };
+  const sub = data.bag.reduce((a, l) => a + l.qty * l.unit_cents, 0);
+  let recv = `📍 Retirada no local${s.pickup_address ? ` — ${s.pickup_address}` : ''}`;
+  let tot = '';
+  if (d.mode === 'entrega') {
+    const b = findBairro(d.bairro);
+    recv = `🛵 Entrega · ${d.bairro}\n      ${d.address}\n      Taxa: ${b && b.fee != null ? brl(b.fee) : 'a combinar'}`;
+    tot = `\n*Total no Pix: ${brl(sub + (b && b.fee ? b.fee : 0))}*`;
+  }
   return sendText(
     jid,
-    `📋 *Confira seu pedido:*\n\n${bagText(data.bag)}\n\n👤 ${data.name}\n📞 ${fmtPhone(data.phone)}\n💠 Pagamento: Pix antecipado\n📍 Retirada no local (divulgado no Instagram)\n\n*1* — Confirmar e pagar\n*2* — Alterar itens\n*3* — Cancelar`
+    `📋 *Confira seu pedido:*\n\n${tot ? bagText(data.bag).replace('*Total:', '*Itens:') : bagText(data.bag)}${tot}\n\n👤 ${data.name}\n📞 ${fmtPhone(data.phone)}\n💠 Pagamento: Pix antecipado\n${recv}\n\n*1* — Confirmar e pagar\n*2* — Alterar itens\n*3* — Cancelar`
   );
 }
 
