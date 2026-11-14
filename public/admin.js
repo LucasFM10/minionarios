@@ -151,6 +151,7 @@
           <span class="o-total">${brl(o.total_cents)}</span>
           <span class="badge ${o.source === 'whatsapp' ? 'wa' : ''}">${o.source === 'whatsapp' ? 'WhatsApp' : o.source === 'admin' ? 'Manual' : 'Site'}</span>
           <span class="sp"></span>
+          ${o.source === 'site' && !o.wa_jid && !o.has_receipt ? `<span class="badge nr">aguardando WhatsApp</span>` : ''}
           ${o.has_receipt ? `<button class="btn sm light" data-receipt="${o.id}">🧾 Comprovante</button>` : `<span class="badge nr">sem comprovante</span>`}
         </div>
         <div class="o-actions">
@@ -312,7 +313,6 @@
     $('#settingsForm').innerHTML = `
       <fieldset><legend>Vendas</legend>
         ${sw('accepting_orders', 'Pré-venda aberta (aceitando pedidos)')}
-        ${sw('require_receipt', 'Exigir comprovante para enviar pedido pelo site')}
         ${sw('notify_status_whatsapp', 'Avisar o cliente no WhatsApp quando o status mudar')}
         ${sw('delivery_enabled', 'Oferecer entrega (taxa por bairro)')}
         ${f('delivery_note', 'Texto da entrega no topo do cardápio')}

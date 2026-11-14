@@ -109,6 +109,8 @@ const publicOrder = (o, events) => ({
   status: o.status,
   status_info: o.status_info,
   has_receipt: o.has_receipt,
+  wa_linked: !!o.wa_jid,
+  ref: o.code.slice(0, 6),
   created_at: o.created_at,
   events: events || store.orderEvents(o.id),
 });
@@ -148,7 +150,6 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
     } catch {
       return res.status(400).json({ error: 'Itens inválidos.' });
     }
-    if (s.require_receipt === '1' && !req.file) return res.status(400).json({ error: 'Anexe o comprovante do Pix para concluir.' });
     let order = store.createOrder({
       customer_name: req.body.name || '',
       phone: req.body.phone || '',
@@ -409,4 +410,12 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Arquivo muito grande (máx. 10 MB).' : 'Erro interno.' });
 });
 
-app.listen(PORT, () => console.log(`Minionários rodando na porta ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Minionários rodando na porta ${PORT}`);
+  // Cria a instância da Evolution e registra o webhook automaticamente (só falta ler o QR / código no celular).
+  if (wa.isConfigured() && wa.cfg().publicUrl) {
+    wa.setupInstance()
+      .then((st) => console.log('[wa] instância pronta:', st.state))
+      .catch((e) => console.error('[wa] auto-setup falhou:', e.message));
+  }
+});

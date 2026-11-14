@@ -15,7 +15,7 @@
   const byId = (id) => PRODUCTS.find((p) => p.id === +id);
   let bag = store.get('mn_bag2', {});
   let cliente = Object.assign({ nome: '', tel: '', obs: '', modo: '', bairro: '', rua: '', ref: '' }, store.get('mn_cliente2', {}));
-  let pedido = null, pix = null, receipt = null, sending = false;
+  let pedido = null, sending = false, waSent = true, closeWarned = false;
   const hasBurger = () => Object.keys(bag).some((k) => byId(k) && BURGER_CATS.includes(norm(byId(k).category)));
   const findBairro = (n) => BAIRROS.find((b) => b.n === n);
 
@@ -95,6 +95,7 @@
   let view = null, history_ = [];
   function openSheet(v) { if (view === null) { $('#scrim').hidden = false; $('#sheet').hidden = false; requestAnimationFrame(() => { $('#scrim').classList.add('on'); $('#sheet').classList.add('on'); }); } else history_.push(view); show(v); }
   function closeSheet() {
+    if (view === DoneView && !waSent && !closeWarned) { closeWarned = true; const a = $('#waAlert'); if (a) { a.classList.remove('nudge'); void a.offsetWidth; a.classList.add('nudge'); a.scrollIntoView({ block: 'center' }); } toast('Conclua o pedido no WhatsApp antes de sair'); return; }
     $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on');
     setTimeout(() => { $('#scrim').hidden = true; $('#sheet').hidden = true; }, 220);
     if (view === DoneView) { renderMyOrders(); }
@@ -165,7 +166,7 @@
       </div>
       <div class="field"><span class="legend">Pagamento</span>
         <div class="opts">
-          <div class="opt" style="border-color:var(--ink);background:var(--yellow-soft);cursor:default"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px"><path d="M5 12l5 5 9-10"/></svg><div><b>Pix antecipado</b><span>A reserva é feita com pagamento antecipado por Pix. Na próxima tela você vê o QR Code e o Pix copia e cola.</span></div></div>
+          <div class="opt" style="border-color:var(--ink);background:var(--yellow-soft);cursor:default"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px"><path d="M5 12l5 5 9-10"/></svg><div><b>Pix antecipado</b><span>A reserva é feita com pagamento antecipado por Pix. O QR Code e o Pix copia e cola chegam no WhatsApp da equipe.</span></div></div>
         </div></div>
       <div class="field"><label for="obs">Observação (opcional)</label><textarea id="obs" placeholder="Ex.: sem cebola">${esc(cliente.obs)}</textarea></div>
       <p class="err" id="eApi" hidden></p>
@@ -180,7 +181,7 @@
       const t = taxaAtual();
       $('#nextT').textContent = brl(bagTotal() + (typeof t === 'number' ? t : 0));
     };
-    $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="next"><span>Continuar</span><span class="price" id="nextT">${brl(bagTotal())}</span></button>`;
+    $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="next"><span>Fechar pedido</span><span class="price" id="nextT">${brl(bagTotal())}</span></button>`;
     $('#f').addEventListener('change', refresh); refresh();
     $('#next').onclick = async () => {
       const nome = $('#nome').value.trim(), t = $('#tel').value, d = t.replace(/\D/g, ''), m = modo(), obs = $('#obs').value.trim();
@@ -193,98 +194,45 @@
       cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '' }; store.set('mn_cliente2', cliente);
       const items = Object.entries(bag).map(([k, q]) => ({ product_id: +k, qty: q }));
       const delivery = ent ? { mode: 'entrega', bairro, address: rua, ref } : { mode: 'retirada' };
-      const btn = $('#next'); btn.disabled = true;
-      try {
-        const r = await fetch('/api/pix', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items, delivery }) });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error);
-        pix = j; pedido = { items, delivery, itens: Object.entries(bag).map(([k, q]) => ({ p: byId(k), q })) }; receipt = null;
-        openSheet(PixView);
-      } catch (e) { const el = $('#eApi'); el.hidden = false; el.textContent = e.message || 'Erro ao gerar o Pix. Tente novamente.'; btn.disabled = false; }
+      pedido = { items, delivery };
+      createOrder();
     };
   } };
 
-  /* pix */
-  async function copyText(txt, okMsg) {
-    try { await navigator.clipboard.writeText(txt); toast(okMsg); }
-    catch (e) { const ta = document.createElement('textarea'); ta.value = txt; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (_) {} ta.remove(); toast(ok ? okMsg : 'Segure no código para copiar'); }
-  }
-  function linesHtml() {
-    const ent = pix.delivery.mode === 'entrega';
-    return `<dl class="lines"><dt>Itens</dt><dd>${brl(pix.subtotal_cents)}</dd>${ent ? `<dt>Entrega · ${esc(pix.delivery.bairro)}</dt><dd>${pix.fee_cents === null ? 'a combinar' : brl(pix.fee_cents)}</dd>` : `<dt>Retirada no local</dt><dd>grátis</dd>`}<dt class="tot">Total no Pix</dt><dd class="tot">${brl(pix.total_cents)}</dd></dl>`;
-  }
-  const PixView = { render() {
-    $('#shTitle').textContent = 'Pagamento via Pix';
-    $('#shBody').innerHTML = `<p class="pix-total">Valor a pagar <span class="price">${brl(pix.total_cents)}</span></p>
-      ${linesHtml()}
-      <div class="qr" aria-label="QR Code Pix"><img src="${pix.qr}" alt="QR Code Pix"></div>
-      <p class="center" style="color:var(--muted);font-size:13px;margin:0">O valor já vem preenchido no QR Code e no copia e cola.</p>
-      <div class="field"><span class="legend">Pix copia e cola</span><div class="copybox"><code>${esc(pix.payload)}</code><button class="copybtn" type="button" id="cpCode">Copiar</button></div></div>
-      <dl class="kv"><dt>Recebedor</dt><dd>${esc(S.pix_name)}</dd><dt>Chave (celular)</dt><dd>${esc(fmtKey(S.pix_key))} <button class="copybtn" type="button" id="cpKey" style="padding:4px 8px;margin-left:4px">Copiar</button></dd></dl>
-      <ol class="steps"><li>Abra o app do seu banco e pague com o QR Code ou com o Pix copia e cola.</li><li>Tire print do comprovante.</li><li><b>Anexe o comprovante</b> aqui embaixo e toque em <b>Enviar pedido</b>.</li></ol>
-      <label class="up${receipt ? ' ok' : ''}" id="up"><span class="uico" id="uico">${receipt ? '' : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5L12.5 4a4 4 0 0 1 5.7 5.7L9.6 18.3a2 2 0 0 1-2.8-2.8L15 7.3"/></svg>'}</span><div><b>${receipt ? 'Comprovante anexado' : 'Anexar comprovante do Pix'}</b><span>${receipt ? esc(receipt.name) + ' · toque para trocar' : 'Foto, print ou PDF'}</span></div><input type="file" id="file" accept="image/*,application/pdf"></label>
-      <div class="alert" id="pAlert"><b class="h">Seu pedido só vale com o comprovante</b>Depois de pagar, anexe o print do Pix e toque em <b>Enviar pedido</b>. Você recebe o número do pedido na hora e acompanha o status por aqui.</div>
-      <p class="err" id="eSend" hidden></p>`;
-    if (receipt && receipt.type.startsWith('image/')) { const u = $('#uico'); u.style.backgroundImage = `url('${URL.createObjectURL(receipt)}')`; }
-    $('#cpCode').onclick = () => copyText(pix.payload, 'Código Pix copiado');
-    $('#cpKey').onclick = () => copyText(String(S.pix_key).replace(/[^\d+]/g, '').replace(/^\+55/, ''), 'Chave copiada');
-    $('#file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; if (f.size > 10 * 1024 * 1024) { toast('Arquivo muito grande (máx. 10 MB)'); return; } receipt = f; PixView.render(); };
-    const need = S.require_receipt && !receipt;
-    $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="send" ${need ? 'aria-disabled="true"' : ''}><span>${need ? 'Anexe o comprovante' : 'Enviar pedido'}</span><span class="price">${brl(pix.total_cents)}</span></button>`;
-    $('#send').onclick = () => {
-      if (need) { const a = $('#up'); a.classList.remove('nudge'); void a.offsetWidth; a.classList.add('nudge'); a.scrollIntoView({ block: 'center', behavior: 'smooth' }); toast('Anexe o comprovante do Pix'); return; }
-      sendOrder();
-    };
-  } };
-
-  async function sendOrder() {
+  /* concluir no WhatsApp */
+  const WA_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.1c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .2-3.3-.7-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2.1 1-2.4c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .6.5l.9 2.1c.1.2.1.4 0 .5l-.3.5-.4.4c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.6-.1l.9-1c.2-.3.4-.2.6-.1l2 1c.3.1.5.2.5.3.1.1.1.6-.1 1.2z"/></svg>`;
+  async function createOrder() {
     if (sending) return; sending = true;
-    const btn = $('#send'); btn.disabled = true; btn.firstElementChild.textContent = 'Enviando…';
+    const btn = $('#next'); btn.disabled = true; btn.firstElementChild.textContent = 'Gerando pedido…';
     try {
       const fd = new FormData();
       fd.append('name', cliente.nome); fd.append('phone', cliente.tel); fd.append('notes', cliente.obs);
       fd.append('items', JSON.stringify(pedido.items)); fd.append('delivery', JSON.stringify(pedido.delivery));
-      if (receipt) fd.append('receipt', receipt);
       const r = await fetch('/api/orders', { method: 'POST', body: fd });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
-      pedido.order = j.order;
+      pedido.order = j.order; waSent = false; closeWarned = false;
       const mine = store.get('mn_orders', []); mine.unshift({ code: j.order.code, number: j.order.number }); store.set('mn_orders', mine.slice(0, 20));
-      bag = {}; saveBag(); receipt = null;
+      bag = {}; saveBag();
       history_ = []; show(DoneView);
     } catch (e) {
-      const el = $('#eSend'); el.hidden = false; el.textContent = e.message || 'Não foi possível enviar. Tente novamente.';
-      btn.disabled = false; btn.firstElementChild.textContent = 'Enviar pedido';
+      const el = $('#eApi'); el.hidden = false; el.textContent = e.message || 'Não foi possível gerar o pedido. Tente novamente.';
+      btn.disabled = false; btn.firstElementChild.textContent = 'Fechar pedido';
     } finally { sending = false; }
   }
-
-  /* concluído */
-  function orderText(o) {
-    const L = [], ent = o.delivery_mode === 'entrega';
-    L.push(`*Pedido #${o.number} · ${S.team_name}*`, `Noite do Hambúrguer · ${S.event_date_label}`, '');
-    L.push(`*Nome:* ${o.customer_name}`, `*Telefone:* ${cliente.tel}`, '', '*Itens:*');
-    o.items.forEach((l) => L.push(`${l.qty}× ${l.name} — ${brl(l.subtotal_cents)}`));
-    L.push('', `*Recebimento:* ${ent ? 'Entrega' : `Retirada no local${S.pickup_address ? ` (${S.pickup_address})` : ''}`}`);
-    if (ent) { L.push(`*Bairro:* ${o.bairro}`, `*Endereço:* ${o.address}`); if (o.address_ref) L.push(`*Referência:* ${o.address_ref}`); }
-    if (ent) L.push(`*Taxa de entrega:* ${o.delivery_fee_cents === null ? 'a combinar (acima de 5 km)' : brl(o.delivery_fee_cents)}`);
-    L.push(`*Total pago no Pix:* ${brl(o.total_cents)}`, `*Acompanhar:* ${location.origin}/pedido?c=${o.code}`);
-    if (cliente.obs) L.push(`*Obs.:* ${cliente.obs}`);
-    return L.join('\n');
-  }
+  const waText = (o) => `Olá! Quero confirmar meu *pedido #${o.number}* da ${S.team_name} 🍔\nValor: *${brl(o.total_cents)}*\nRef: ${o.ref}`;
   const DoneView = { render() {
-    const o = pedido.order;
-    $('#shTitle').textContent = 'Pedido enviado!';
-    const far = o.delivery_mode === 'entrega' && o.delivery_fee_cents === null;
-    const track = `/pedido?c=${encodeURIComponent(o.code)}`;
-    $('#shBody').innerHTML = `<div class="done-ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></div>
-      <p class="center" style="margin:12px 0 0;color:var(--muted)">Número do pedido</p><p class="center code big" style="margin:0">#${esc(o.number)}</p>
-      <p class="center" style="margin:6px 0 0"><span class="pill">${o.status_info.emoji} ${esc(o.status_info.label)}</span></p>
-      <div class="info"><b class="h">Recebemos seu pedido, ${esc(o.customer_name.split(' ')[0])}!</b>A equipe vai conferir o comprovante e confirmar o pagamento. Guarde o número <b>#${esc(o.number)}</b> para a ${o.delivery_mode === 'entrega' ? 'entrega' : 'retirada'}.</div>
-      <ol class="steps"><li>Acompanhe o status do pedido pelo botão abaixo (o link fica salvo neste celular).</li>${far ? `<li>Combine a taxa de entrega com a equipe no WhatsApp.</li>` : ''}<li>Dúvidas? Fale com a equipe no WhatsApp.</li></ol>
-      <div class="field"><span class="legend">Resumo</span><div class="copybox" style="grid-template-columns:1fr"><code style="white-space:pre-wrap;overflow:visible">${esc(orderText(o).replace(/\*/g, ''))}</code></div></div>`;
-    const wa = `https://wa.me/${S.whatsapp_number}?text=${encodeURIComponent(orderText(o))}`;
-    $('#shFoot').innerHTML = `<a class="cta dark" href="${track}"><span>Acompanhar pedido</span><span class="price">#${esc(o.number)}</span></a>
-      <a class="cta wa" href="${wa}" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.1c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .2-3.3-.7-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2.1 1-2.4c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .6.5l.9 2.1c.1.2.1.4 0 .5l-.3.5-.4.4c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.6-.1l.9-1c.2-.3.4-.2.6-.1l2 1c.3.1.5.2.5.3.1.1.1.6-.1 1.2z"/></svg><span>Falar com a equipe no WhatsApp</span></a>`;
+    const o = pedido.order, ent = o.delivery_mode === 'entrega';
+    $('#shTitle').textContent = 'Último passo';
+    const url = `https://wa.me/${S.whatsapp_number}?text=${encodeURIComponent(waText(o))}`;
+    $('#shBody').innerHTML = `<div class="alert" id="waAlert" style="margin-top:4px"><b class="h">Falta concluir no WhatsApp!</b>Seu pedido foi gerado, mas só é <b>confirmado no WhatsApp</b>. Toque no botão verde e envie a mensagem que já vai pronta.</div>
+      <p class="center" style="margin:16px 0 0;color:var(--muted)">Número do pedido</p><p class="center code big" style="margin:0">#${esc(o.number)}</p>
+      <dl class="lines"><dt>Itens</dt><dd>${brl(o.subtotal_cents)}</dd>${ent ? `<dt>Entrega · ${esc(o.bairro)}</dt><dd>${o.delivery_fee_cents === null ? 'a combinar' : brl(o.delivery_fee_cents)}</dd>` : `<dt>Retirada no local</dt><dd>grátis</dd>`}<dt class="tot">Total no Pix</dt><dd class="tot">${brl(o.total_cents)}</dd></dl>
+      <ol class="steps"><li>Toque em <b>Concluir pedido no WhatsApp</b> e envie a mensagem com o número do pedido.</li><li>Você recebe na conversa o <b>QR Code e o Pix copia e cola</b> com o valor.</li><li>Pague e <b>anexe o comprovante do Pix</b> na mesma conversa. Pronto!</li></ol>
+      <p class="cause" style="text-align:center">Acompanhe o status pelo WhatsApp ou pelo link <a href="/pedido?c=${encodeURIComponent(o.code)}">Acompanhar pedido</a>.</p>`;
+    $('#shFoot').innerHTML = `<a class="cta wa" id="wa" href="${url}" target="_blank" rel="noopener">${WA_ICON}<span>Concluir pedido no WhatsApp</span></a>
+      <a class="ghost" href="/pedido?c=${encodeURIComponent(o.code)}">Acompanhar pedido #${esc(o.number)}</a>`;
+    $('#wa').addEventListener('click', () => { waSent = true; });
   } };
 
   load().catch(() => { $('#menu').innerHTML = '<p class="empty">Não foi possível carregar o cardápio. Recarregue a página.</p>'; });

@@ -87,7 +87,8 @@ async function setupInstance() {
 
 async function getQr() {
   const { instance } = cfg();
-  const r = await evo('GET', `/instance/connect/${instance}`);
+  const num = String(process.env.WHATSAPP_NUMBER || '').replace(/\D/g, '');
+  const r = await evo('GET', `/instance/connect/${instance}${num ? `?number=${num}` : ''}`);
   return { base64: r.base64 || null, pairingCode: r.pairingCode || null, code: r.code || null };
 }
 
@@ -180,6 +181,14 @@ function siteUrl(p = '') {
   return (cfg().publicUrl || '') + p;
 }
 
+/** Orders for this chat: linked by WhatsApp JID or matching phone. */
+function ordersFor(jid, phone, limit = 5) {
+  const byJid = store.db.prepare('SELECT id FROM orders WHERE wa_jid = ? ORDER BY id DESC LIMIT ?').all(jid, limit).map((r) => store.getOrderById(r.id));
+  const byPhone = phone ? store.findOrdersByPhone(phone, limit) : [];
+  const seen = new Set();
+  return [...byJid, ...byPhone].filter((o) => !seen.has(o.id) && seen.add(o.id)).sort((a, b) => b.id - a.id).slice(0, limit);
+}
+
 function statusText(orders) {
   if (!orders.length) return 'Não encontrei pedidos para este número 🤔\nSe você fez o pedido com outro telefone, consulte pelo site: ' + siteUrl('/pedido');
   return (
@@ -193,6 +202,41 @@ function statusText(orders) {
       )
       .join('\n\n')
   );
+}
+
+const OPTIONS_TEXT = `*O que você pode fazer por aqui:*\n*2* — Acompanhar o status do pedido\n*pix* — Receber o código Pix de novo\n*menu* — Ver todas as opções`;
+
+/** Customer came from the site with "pedido #012 ... Ref: abc123". */
+async function confirmSiteOrder(jid, phone, number, ref, pushName) {
+  const s = store.getSettings();
+  const o = store.getOrderByNumber(number);
+  const okRef = o && ref && o.code.slice(0, 6).toLowerCase() === ref.toLowerCase();
+  const okPhone = o && phone && store.phoneKey(o.phone) === store.phoneKey(phone);
+  if (!o || (!okRef && !okPhone)) {
+    return sendText(jid, `Não encontrei o *pedido #${String(number).padStart(3, '0')}* 🤔\nConfira o número ou fale com a equipe por aqui mesmo.\n\n${OPTIONS_TEXT}`);
+  }
+  if (o.status === 'cancelado') return sendText(jid, `O *pedido #${o.number_label}* foi cancelado. Qualquer dúvida, é só responder esta mensagem.`);
+  store.db.prepare('UPDATE orders SET wa_jid = ? WHERE id = ?').run(jid, o.id);
+  store.saveSession(jid, 'receipt', { order_id: o.id });
+  const first = (o.customer_name || pushName || '').split(' ')[0];
+  const ent = o.delivery_mode === 'entrega';
+  const itens = o.items.map((l) => `• ${l.qty}x ${l.name} — ${brl(l.subtotal_cents)}`).join('\n');
+  const recv = ent
+    ? `🛵 Entrega · ${o.bairro} — ${o.address}${o.address_ref ? ` (${o.address_ref})` : ''}\n      Taxa: ${o.delivery_fee_cents == null ? 'a combinar com a equipe' : brl(o.delivery_fee_cents)}`
+    : `📍 Retirada no local${s.pickup_address ? ` — ${s.pickup_address}` : ''}`;
+  await sendText(jid, `Oi${first ? ', ' + first : ''}! 💛💙 Recebemos o seu *pedido #${o.number_label}*.\n\n${itens}\n${recv}\n\n*Total: ${brl(o.total_cents)}*`);
+  if (o.has_receipt || o.status !== 'pedido_feito') {
+    return sendText(jid, `✅ Já temos o comprovante deste pedido. Status atual: ${o.status_info.emoji} *${o.status_info.label}*.\n\nQualquer dúvida, é só falar com a gente por este mesmo número.\n\n${OPTIONS_TEXT}`);
+  }
+  const payload = buildPixPayload({ key: s.pix_key, name: s.pix_name, city: s.pix_city, amountCents: o.total_cents, txid: 'MIN' + o.number_label });
+  try {
+    await sendImage(jid, await pixQrPng(payload), `💠 Pague *${brl(o.total_cents)}* via Pix — QR Code acima ou o código *copia e cola* da próxima mensagem.\nRecebedor: ${s.pix_name} · Chave: ${s.pix_key}`);
+    await sendText(jid, payload);
+  } catch (e) {
+    console.error('[wa] erro ao enviar Pix:', e.message);
+    await sendText(jid, `💠 Pix (chave): ${s.pix_key} · Valor: ${brl(o.total_cents)}`);
+  }
+  return sendText(jid, `📎 *Para confirmar o pedido, anexe aqui nesta conversa o comprovante do Pix* (foto, print ou PDF).\n\nQualquer dúvida, é só falar com a gente por este mesmo número.\n\n${OPTIONS_TEXT}`);
 }
 
 function mainMenuText(s, name) {
@@ -291,12 +335,20 @@ async function handleMessage(data) {
       const m = msg.documentWithCaptionMessage ? { ...data, message: { ...msg, ...msg.documentWithCaptionMessage.message } } : data;
       const { buf, mime } = await downloadMedia(m);
       saveReceipt(order.id, buf, mime);
-      store.saveSession(jid, 'idle', {});
+      if (!order.wa_jid) store.db.prepare('UPDATE orders SET wa_jid = ? WHERE id = ?').run(jid, order.id);
+      store.saveSession(jid, 'main', {});
       return reply(
-        `✅ Comprovante recebido para o *pedido #${order.number_label}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Envie *2* para acompanhar.`
+        `✅ Comprovante recebido para o *pedido #${order.number_label}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Qualquer dúvida, é só falar com a gente por este mesmo número.\n\n*2* — Acompanhar o status do pedido\n*menu* — Ver todas as opções`
       );
     }
     if (!text) return reply('Recebi seu arquivo, mas não encontrei um pedido aguardando comprovante. Envie *menu* para começar.');
+  }
+
+  // Order coming from the site: "pedido #012 ... Ref: abc123"
+  const siteM = text.match(/pedido\s*\*?\s*#\s*(\d{1,4})/i);
+  if (siteM && /confirmar/i.test(text)) {
+    const refM = text.match(/ref\.?\s*:?\s*([A-Za-z0-9_-]{6})/i);
+    return confirmSiteOrder(jid, phone, parseInt(siteM[1], 10), refM && refM[1], data.pushName);
   }
 
   // Global commands
@@ -305,13 +357,13 @@ async function handleMessage(data) {
     return reply((t === 'cancelar' ? 'Tudo bem, cancelei o que estava em andamento.\n\n' : '') + mainMenuText(s, data.pushName));
   }
   if (['status', 'meu pedido', 'acompanhar', 'consultar'].includes(t) || /^status\s*#?\d+$/.test(t)) {
-    return reply(statusText(phone ? store.findOrdersByPhone(phone, 5) : store.listOrders().filter((o) => o.wa_jid === jid).slice(0, 5)));
+    return reply(statusText(ordersFor(jid, phone)));
   }
 
   switch (session.state) {
     case 'main': {
       if (t === '1' || t.includes('pedido') || t.includes('pedir')) return startOrdering(jid, s, accepting);
-      if (t === '2') return reply(statusText(phone ? store.findOrdersByPhone(phone, 5) : []));
+      if (t === '2') return reply(statusText(ordersFor(jid, phone)));
       if (t === '3' || t.includes('cardapio')) return reply(`📲 Cardápio completo com fotos: ${siteUrl('/')}`);
       return reply('Não entendi 😅 Responda *1*, *2* ou *3*.\n\n' + mainMenuText(s));
     }

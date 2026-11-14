@@ -28,7 +28,7 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
     const fmtTime = (iso) => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const mine = (() => { try { return JSON.parse(localStorage.getItem('mn_orders')) || []; } catch { return []; } })();
-    let statuses = [];
+    let statuses = [], S = {};
     let timer;
     const code = new URLSearchParams(location.search).get('c');
 
@@ -48,7 +48,8 @@
         <div class="card"><ul class="timeline">
           ${statuses.map((s, i) => `<li class="${i < idx ? 'done' : i === idx ? 'current' : ''}"><span class="dot">${s.emoji}</span><div><b>${esc(s.label)}</b>${at[s.key] ? `<small>${fmtTime(at[s.key])}</small>` : ''}</div></li>`).join('')}
         </ul></div>`}
-        ${!o.has_receipt && o.status === 'pedido_feito' ? `
+        ${!o.wa_linked && !o.has_receipt && o.status === 'pedido_feito' ? `<a class="btn block" style="background:#1E8E4E;margin-bottom:12px" target="_blank" rel="noopener" href="https://wa.me/${S.whatsapp_number}?text=${encodeURIComponent(`Olá! Quero confirmar meu *pedido #${o.number}* da ${S.team_name} 🍔\nValor: *${brl(o.total_cents)}*\nRef: ${o.ref}`)}">Concluir pedido no WhatsApp</a><p class="small muted center" style="margin:-4px 0 12px">O pedido só é confirmado depois que você envia a mensagem e o comprovante do Pix no WhatsApp.</p>` : ''}
+        ${false && !o.has_receipt && o.status === 'pedido_feito' ? `
         <label class="upload" style="margin-bottom:12px"><span class="ico">📎</span><span style="flex:1"><b>Enviar comprovante do Pix</b><br /><span class="small muted">Ainda não recebemos o comprovante deste pedido</span></span>
           <input type="file" id="rc" accept="image/*,application/pdf" /></label>` : ''}
         <div class="card">
@@ -98,7 +99,7 @@
     }
 
     fetch('/api/menu').then((r) => r.json()).then((m) => {
-      statuses = m.statuses;
+      statuses = m.statuses; S = m.settings;
       if (code) { showOrder(code); timer = setInterval(() => document.visibilityState === 'visible' && !document.querySelector('#rc:focus') && showOrder(code), 15000); }
       else { $('#app').innerHTML = lookupForm(); bindLookup(); }
     });

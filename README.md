@@ -25,10 +25,15 @@ ADMIN_PASSWORD=senha npm start   # http://localhost:3000
 | `EVOLUTION_URL` | URL da Evolution API v2 |
 | `EVOLUTION_API_KEY` | API key global da Evolution |
 | `EVOLUTION_INSTANCE` | Nome da instância (padrão `minionarios`) |
+| `WHATSAPP_NUMBER` | Número da equipe (com 55). Se definido, o admin mostra um **código de pareamento** além do QR |
 | `WEBHOOK_SECRET` | Token do webhook (opcional; derivado das outras chaves se ausente) |
 | `DATA_DIR` | Pasta do SQLite e uploads (padrão `./data`; no Docker `/app/data` — monte um volume) |
 
 ### WhatsApp
+
+Na inicialização o app cria a instância na Evolution e registra o webhook sozinho. Só falta vincular o número: em **Admin › WhatsApp › Mostrar QR Code**, leia o QR ou digite o código de pareamento no celular (WhatsApp › Aparelhos conectados).
+
+Fluxo do site: o cliente fecha o pedido (gera o número), toca em **Concluir pedido no WhatsApp** e envia a mensagem pronta; o bot responde com o Pix e pede o comprovante na conversa.
 
 1. Configure as variáveis da Evolution e abra **Admin › WhatsApp**.
 2. Clique **Criar instância** (cria a instância e registra o webhook `PUBLIC_URL/api/whatsapp/webhook`).
