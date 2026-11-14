@@ -112,7 +112,7 @@
     const p = byId(id); let q = 1;
     const PV = { render() {
       $('#shTitle').textContent = '';
-      $('#shBody').innerHTML = `<div class="p-img${p.image && p.image.startsWith('/img/') ? ' lowres' : ''}">${phHtml(p, p.name)}</div><h3 class="p-name">${esc(p.name)}</h3><p class="p-desc">${esc(p.description)}</p><div class="p-price price">${brl(p.price_cents)}</div>`;
+      $('#shBody').innerHTML = `<div class="p-img">${phHtml(p, p.name)}</div><h3 class="p-name">${esc(p.name)}</h3><p class="p-desc">${esc(p.description)}</p><div class="p-price price">${brl(p.price_cents)}</div>`;
       if (!S.accepting_orders) { $('#shFoot').innerHTML = `<p class="center" style="color:var(--muted);margin:0">Pré-venda encerrada.</p>`; return; }
       const draw = () => {
         $('#shFoot').innerHTML = `<div class="row"><div class="stepper"><button type="button" id="qm" aria-label="Menos">−</button><output id="qv">${q}</output><button type="button" id="qp" aria-label="Mais">+</button></div><button class="cta" type="button" id="add" style="flex:1"><span>Adicionar</span><span class="price">${brl(p.price_cents * q)}</span></button></div>`;
@@ -161,6 +161,7 @@
         </div><span class="err" id="eModo" hidden>Escolha retirar no local ou receber em casa.</span></div>
       <div id="addr" hidden>
         <div class="field"><label for="bairro">Bairro</label><select id="bairro"><option value="">Selecione seu bairro</option>${opts}</select><span class="err" id="eBairro" hidden>Selecione o seu bairro.</span><div id="taxaBox" hidden></div></div>
+        <div class="field"><label for="cep">CEP <span style="font-weight:400;color:var(--muted)">(opcional — preenche a rua)</span></label><input id="cep" inputmode="numeric" autocomplete="postal-code" value="${esc(cliente.cep || '')}" placeholder="00000-000"><span class="err" id="eCep" hidden></span></div>
         <div class="field"><label for="rua">Rua e número</label><input id="rua" autocomplete="street-address" value="${esc(cliente.rua)}" placeholder="Ex.: Rua Golfo de Lion, 120"><span class="err" id="eRua" hidden>Digite a rua e o número.</span></div>
         <div class="field"><label for="ref">Complemento e ponto de referência</label><input id="ref" value="${esc(cliente.ref)}" placeholder="Ex.: apto 302, perto da padaria"></div>
       </div>
@@ -183,6 +184,21 @@
     };
     $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="next"><span>Fechar pedido</span><span class="price" id="nextT">${brl(bagTotal())}</span></button>`;
     $('#f').addEventListener('change', refresh); refresh();
+    const cep = $('#cep');
+    cep.oninput = async () => {
+      let d = cep.value.replace(/\D/g, '').slice(0, 8);
+      cep.value = d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+      $('#eCep').hidden = true;
+      if (d.length !== 8) return;
+      try {
+        const r = await fetch(`https://viacep.com.br/ws/${d}/json/`).then((r) => r.json());
+        if (r.erro) throw new Error('CEP não encontrado. Digite a rua manualmente.');
+        if (r.logradouro) { $('#rua').value = `${r.logradouro}, `; $('#rua').focus(); }
+        const b = BAIRROS.find((x) => norm(x.n) === norm(r.bairro));
+        if (b) { $('#bairro').value = b.n; refresh(); }
+        else if (r.bairro) { const e = $('#eCep'); e.hidden = false; e.style.color = 'var(--muted)'; e.textContent = `Bairro pelo CEP: ${r.bairro}. Selecione na lista acima.`; }
+      } catch (e) { const el = $('#eCep'); el.hidden = false; el.style.color = ''; el.textContent = e.message.includes('CEP') ? e.message : 'Não foi possível consultar o CEP. Digite a rua manualmente.'; }
+    };
     $('#next').onclick = async () => {
       const nome = $('#nome').value.trim(), t = $('#tel').value, d = t.replace(/\D/g, ''), m = modo(), obs = $('#obs').value.trim();
       const bairro = $('#bairro').value, rua = $('#rua').value.trim(), ref = $('#ref').value.trim();
@@ -191,9 +207,10 @@
       if (nome.length < 2) { $('#nome').focus(); return; } if (d.length < 10) { $('#tel').focus(); return; }
       if (!m) { $('#eModo').scrollIntoView({ block: 'center' }); return; }
       if (ent && !bairro) { $('#bairro').focus(); return; } if (ent && rua.length < 4) { $('#rua').focus(); return; }
-      cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '' }; store.set('mn_cliente2', cliente);
+      const cepV = ent ? $('#cep').value.trim() : '';
+      cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '', cep: cepV }; store.set('mn_cliente2', cliente);
       const items = Object.entries(bag).map(([k, q]) => ({ product_id: +k, qty: q }));
-      const delivery = ent ? { mode: 'entrega', bairro, address: rua, ref } : { mode: 'retirada' };
+      const delivery = ent ? { mode: 'entrega', bairro, address: cepV ? `${rua} — CEP ${cepV}` : rua, ref } : { mode: 'retirada' };
       pedido = { items, delivery };
       createOrder();
     };
