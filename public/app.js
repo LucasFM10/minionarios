@@ -112,7 +112,7 @@
     const p = byId(id); let q = 1;
     const PV = { render() {
       $('#shTitle').textContent = '';
-      $('#shBody').innerHTML = `<div class="p-img">${phHtml(p, p.name)}</div><h3 class="p-name">${esc(p.name)}</h3><p class="p-desc">${esc(p.description)}</p><div class="p-price price">${brl(p.price_cents)}</div>`;
+      $('#shBody').innerHTML = `<div class="p-img${p.image && p.image.startsWith('/img/') ? ' lowres' : ''}">${phHtml(p, p.name)}</div><h3 class="p-name">${esc(p.name)}</h3><p class="p-desc">${esc(p.description)}</p><div class="p-price price">${brl(p.price_cents)}</div>`;
       if (!S.accepting_orders) { $('#shFoot').innerHTML = `<p class="center" style="color:var(--muted);margin:0">Pré-venda encerrada.</p>`; return; }
       const draw = () => {
         $('#shFoot').innerHTML = `<div class="row"><div class="stepper"><button type="button" id="qm" aria-label="Menos">−</button><output id="qv">${q}</output><button type="button" id="qp" aria-label="Mais">+</button></div><button class="cta" type="button" id="add" style="flex:1"><span>Adicionar</span><span class="price">${brl(p.price_cents * q)}</span></button></div>`;
