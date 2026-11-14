@@ -1,8 +1,17 @@
+# ---- build: compila dependências nativas (better-sqlite3) ----
+FROM node:22-slim AS build
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# ---- runtime ----
 FROM node:22-slim
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/data
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/node_modules ./node_modules
+COPY package.json ./
 COPY src ./src
 COPY public ./public
 RUN mkdir -p /app/data && chown -R node:node /app/data
