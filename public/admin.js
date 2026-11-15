@@ -455,10 +455,10 @@
       <div class="card">
         <div class="wa-status"><span class="big ${w.state}"></span><div><b>${WA_LABEL[w.state] || esc(w.state)}</b><br><small class="muted">Instância <code class="k">${esc(w.instance)}</code></small></div></div>
         ${w.error ? `<p class="err">${esc(w.error)}</p>` : ''}
-        <div class="actions">
+        ${!w.manage ? `<p class="muted" style="margin:12px 0 0">A instância é gerenciada fora do painel (variáveis do app). Para criar/conectar por aqui, defina <code class="k">EVOLUTION_AUTO_SETUP=true</code>. Garanta que o webhook da instância aponte para o endereço abaixo, com o evento <code class="k">MESSAGES_UPSERT</code> e base64 ligado.</p>` : `<div class="actions">
           ${w.state !== 'open' ? `<button class="btn primary" id="waQr">${w.exists ? 'Conectar (QR Code / código)' : 'Criar instância e conectar'}</button>` : `<button class="btn danger" id="waOut">Desconectar</button>`}
           <button class="btn" id="waSetup">Reconfigurar webhook</button>
-        </div>
+        </div>`}
         <div id="qrArea" style="margin-top:16px"></div>
         <p class="muted" style="font-size:12px;margin:14px 0 0">Webhook: <code class="k">${esc(w.webhook || '')}</code></p>
       </div>
@@ -469,7 +469,7 @@
         <ol class="steps-ol"><li>Recebe a mensagem "Quero confirmar meu pedido #012…" vinda do site e envia o Pix.</li><li>Pede e anexa o comprovante ao pedido.</li><li><b>2</b> ou <b>status</b>: mostra o status; <b>1</b>: faz pedido pelo chat; <b>menu</b>: opções.</li></ol>
       </div>`;
     const qb = $('#waQr'); if (qb) qb.onclick = async () => { if (!w.exists) { try { await api('/api/admin/whatsapp/setup', { method: 'POST' }); } catch (e) { return toast(e.message); } } showQr(); };
-    $('#waSetup').onclick = async () => { try { await api('/api/admin/whatsapp/setup', { method: 'POST' }); toast('Webhook configurado'); loadWa(); } catch (e) { toast(e.message); } };
+    const ws = $('#waSetup'); if (ws) ws.onclick = async () => { try { await api('/api/admin/whatsapp/setup', { method: 'POST' }); toast('Webhook configurado'); loadWa(); } catch (e) { toast(e.message); } };
     const out = $('#waOut'); if (out) out.onclick = async () => { if (confirm('Desconectar o WhatsApp do bot?')) { await api('/api/admin/whatsapp/logout', { method: 'POST' }).catch((e) => toast(e.message)); loadWa(); refreshWaDot(); } };
   }
   async function showQr() {

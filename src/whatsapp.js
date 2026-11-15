@@ -13,6 +13,8 @@ const cfg = () => ({
   url: (process.env.EVOLUTION_URL || '').replace(/\/+$/, ''),
   apiKey: process.env.EVOLUTION_API_KEY || '',
   instance: process.env.EVOLUTION_INSTANCE || 'minionarios',
+  // Só cria/altera a instância e o webhook na Evolution se isso estiver ligado nas variáveis.
+  manage: /^(1|true|sim|yes)$/i.test(process.env.EVOLUTION_AUTO_SETUP || ''),
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
 });
 const webhookSecret = () =>

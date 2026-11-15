@@ -25,6 +25,7 @@ ADMIN_PASSWORD=senha npm start   # http://localhost:3000
 | `EVOLUTION_URL` | URL da Evolution API v2 |
 | `EVOLUTION_API_KEY` | API key global da Evolution |
 | `EVOLUTION_INSTANCE` | Nome da instância (padrão `minionarios`) |
+| `EVOLUTION_AUTO_SETUP` | `true` = o app cria a instância, registra o webhook e mostra QR/desconectar no admin. Vazio/`false` (padrão) = o app não mexe na instância; configure o webhook na Evolution com a URL exibida em Admin › WhatsApp |
 | `WHATSAPP_NUMBER` | Número da equipe (com 55). Se definido, o admin mostra um **código de pareamento** além do QR |
 | `WEBHOOK_SECRET` | Token do webhook (opcional; derivado das outras chaves se ausente) |
 | `DATA_DIR` | Pasta do SQLite e uploads (padrão `./data`; no Docker `/app/data` — monte um volume) |

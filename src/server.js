@@ -396,7 +396,7 @@ app.put(
 
 // WhatsApp admin
 app.get('/api/admin/whatsapp', requireAdmin, async (req, res) => {
-  const base = { configured: wa.isConfigured(), instance: wa.cfg().instance, webhook: wa.cfg().publicUrl ? wa.cfg().publicUrl + '/api/whatsapp/webhook' : null };
+  const base = { configured: wa.isConfigured(), manage: wa.cfg().manage, instance: wa.cfg().instance, webhook: wa.cfg().publicUrl ? wa.webhookUrl() : null };
   if (!base.configured) return res.json(base);
   try {
     res.json({ ...base, ...(await wa.connectionState()) });
@@ -404,21 +404,24 @@ app.get('/api/admin/whatsapp', requireAdmin, async (req, res) => {
     res.json({ ...base, error: e.message });
   }
 });
-app.post('/api/admin/whatsapp/setup', requireAdmin, async (req, res) => {
+// Criar instância, ler QR e desconectar só quando EVOLUTION_AUTO_SETUP=true.
+const requireManage = (req, res, next) =>
+  wa.cfg().manage ? next() : res.status(403).json({ error: 'Gerenciado pelas variáveis: defina EVOLUTION_AUTO_SETUP=true para usar isto.' });
+app.post('/api/admin/whatsapp/setup', requireAdmin, requireManage, async (req, res) => {
   try {
     res.json(await wa.setupInstance());
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
-app.get('/api/admin/whatsapp/qr', requireAdmin, async (req, res) => {
+app.get('/api/admin/whatsapp/qr', requireAdmin, requireManage, async (req, res) => {
   try {
     res.json(await wa.getQr());
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
-app.post('/api/admin/whatsapp/logout', requireAdmin, async (req, res) => {
+app.post('/api/admin/whatsapp/logout', requireAdmin, requireManage, async (req, res) => {
   try {
     res.json(await wa.logout());
   } catch (e) {
@@ -441,8 +444,9 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Minionários rodando na porta ${PORT}`);
-  // Cria a instância da Evolution e registra o webhook automaticamente (só falta ler o QR / código no celular).
-  if (wa.isConfigured() && wa.cfg().publicUrl) {
+  // Com EVOLUTION_AUTO_SETUP=true, cria a instância e registra o webhook (só falta ler o QR no celular).
+  // Sem isso, o app não mexe na Evolution: só envia mensagens pela instância de EVOLUTION_INSTANCE.
+  if (wa.isConfigured() && wa.cfg().publicUrl && wa.cfg().manage) {
     wa.setupInstance()
       .then((st) => console.log('[wa] instância pronta:', st.state))
       .catch((e) => console.error('[wa] auto-setup falhou:', e.message));
