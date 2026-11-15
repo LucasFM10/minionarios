@@ -43,7 +43,7 @@ Fluxo do site: o cliente fecha o pedido (gera o número), toca em **Concluir ped
 ### Regras do bot
 
 - **Nunca envia mensagem por conta própria**: só responde a quem escreveu primeiro (evita banimento). Mudanças de status no painel não geram aviso automático — a equipe avisa manualmente.
-- **Falar com a equipe** (opção *4*, "atendente", "cancelar" com pedido ativo): o bot avisa que um humano vai responder e **pausa**. O painel marca "🙋 Pediu ajuda". Se a equipe responder pelo celular, vira "💬 Equipe atendendo". Em *Conversas* use "Resolvido — retomar bot" (retoma sozinho após 8 h).
+- **Falar com a equipe** (opção *4*, "atendente", "cancelar" com pedido ativo): o bot avisa que alguém da equipe vai entrar em contato (pode ser por outro número) e **continua funcionando** (status, menu). O painel marca "🙋 Pediu ajuda" até alguém clicar em *Marcar como resolvido* em *Conversas*. Só se a equipe responder **pelo número do bot** é que ele pausa naquela conversa ("💬 Equipe atendendo"; retoma com "Resolvido — retomar bot" ou sozinho após 8 h).
 - **Conversas**: todas as mensagens e mídias (comprovantes, fotos) ficam salvas e aparecem em *Admin › Conversas* (somente leitura).
 - **Taxa de entrega**: distância de carro (OpenStreetMap/Nominatim + OSRM) × R$ 1,00/km, arredondada para cima de R$ 0,50. Ajustável em *Ajustes* (valor/km, arredondamento, taxa mínima, distância máxima, coordenadas da retirada). Se o endereço não for localizado, fica "taxa a combinar".
 - Pedidos sem comprovante há mais de 2 h aparecem destacados no painel.

@@ -426,8 +426,8 @@ const HELP_AUTO_RESUME_MS = 8 * 3600 * 1000;
 function getChat(jid) {
   const c = db.prepare('SELECT * FROM wa_chats WHERE jid = ?').get(jid);
   if (!c) return null;
-  // Pausa expira sozinha após 8h sem atividade humana.
-  if (c.human_status !== 'none' && c.human_since && Date.now() - Date.parse(c.human_since) > HELP_AUTO_RESUME_MS) {
+  // Pausa (equipe respondendo pelo número do bot) expira sozinha após 8h sem atividade humana.
+  if (c.human_status === 'handling' && c.human_since && Date.now() - Date.parse(c.human_since) > HELP_AUTO_RESUME_MS) {
     db.prepare("UPDATE wa_chats SET human_status = 'none', human_reason = NULL WHERE jid = ?").run(jid);
     c.human_status = 'none'; c.human_reason = null;
   }
@@ -445,13 +445,17 @@ function logMessage({ jid, direction, kind = 'text', body = '', media_path = nul
 }
 const messageSeen = (waId) => !!waId && !!db.prepare('SELECT 1 FROM wa_messages WHERE wa_id = ?').get(waId);
 
-/** status: 'none' | 'requested' (cliente pediu ajuda) | 'handling' (equipe atendendo). Ambos pausam o bot. */
+/**
+ * status: 'none' | 'requested' (cliente pediu ajuda — só sinaliza no admin, o bot continua respondendo;
+ * a equipe entra em contato por outro número e marca como resolvido) | 'handling' (equipe respondendo
+ * pelo número do bot — pausa o bot).
+ */
 function setHuman(jid, status, reason = null) {
   db.prepare(`INSERT INTO wa_chats (jid, human_status, human_reason, human_since) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     ON CONFLICT(jid) DO UPDATE SET human_status = excluded.human_status, human_reason = excluded.human_reason, human_since = excluded.human_since`).run(jid, status, status === 'none' ? null : reason);
 }
 const touchHuman = (jid) => db.prepare("UPDATE wa_chats SET human_since = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE jid = ?").run(jid);
-const botPaused = (jid) => { const c = getChat(jid); return !!c && c.human_status !== 'none'; };
+const botPaused = (jid) => { const c = getChat(jid); return !!c && c.human_status === 'handling'; };
 
 function listChats() {
   const rows = db.prepare('SELECT * FROM wa_chats WHERE last_at IS NOT NULL ORDER BY last_at DESC LIMIT 200').all();

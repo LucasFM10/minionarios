@@ -338,9 +338,12 @@ async function handleWebhook(body) {
 const IN_PROGRESS = ['ordering', 'name', 'phone', 'mode', 'address', 'confirm'];
 const HELP_RE = /\b(atendente|humano|ajuda|suporte|reclama\w*|problema|falar com (a |um |uma )?(equipe|atendente|humano|pessoa)|(cancelar|alterar|trocar|mudar) (o |meu |esse |este )?pedido)\b/;
 
-const HELP_REPLY = `🙋 Certo! Avisei a equipe — *um atendente humano vai falar com você por aqui em seguida*.\n\nEnquanto isso, pode já escrever sua dúvida ou problema, que ela chega direto para eles. _(Pausei as respostas automáticas.)_`;
+const HELP_REPLY = `🙋 Certo! Avisei a equipe — *uma pessoa da equipe vai entrar em contato com você em breve* (pode ser por outro número).\n\nEnquanto isso, continuo por aqui:\n*2* — Acompanhar o status do pedido\n*menu* — Ver todas as opções`;
 function requestHuman(jid, reason) {
   store.setHuman(jid, 'requested', reason);
+  // Fora de um pedido em andamento, entra em "aguardando equipe": comandos seguem funcionando,
+  // e o texto livre (a pessoa explicando o problema) só fica registrado para a equipe.
+  if (!IN_PROGRESS.includes(store.getSession(jid).state)) store.saveSession(jid, 'help', {});
   return sendText(jid, HELP_REPLY);
 }
 
@@ -356,7 +359,7 @@ function findAwaitingOrder(jid, phone, session) {
   return order;
 }
 
-/** Mensagem enviada por uma pessoa da equipe pelo próprio celular: registra e pausa o bot nessa conversa. */
+/** Mensagem enviada por uma pessoa da equipe pelo celular do bot: registra e pausa o bot nessa conversa. */
 function handleOwnMessage(data, jid) {
   const waId = data.key.id;
   if (store.messageSeen(waId) || !store.markSeen(waId)) return;
@@ -410,7 +413,7 @@ async function handleMessage(data) {
       );
     }
   }
-  if (paused) return; // atendente humano em ação: o bot só registra
+  if (paused) return; // equipe conversando por este número: o bot só registra
   if (isFile && !media && !text) return reply('Não consegui abrir esse arquivo 😕 Pode enviar de novo? Se preferir, envie *4* para falar com a equipe.');
   if (isFile && !text) return reply('Recebi seu arquivo, mas não encontrei um pedido aguardando comprovante. Envie *menu* para começar ou *4* para falar com a equipe.');
   if (mp.kind === 'audio' || mp.kind === 'video') return reply('Por aqui eu só entendo mensagens de texto e comprovantes (foto ou PDF) 😅 Para falar com um atendente, envie *4*.');
@@ -460,6 +463,15 @@ async function handleMessage(data) {
       if (t === '3' || t.includes('cardapio')) return reply(`📲 Cardápio completo com fotos: ${siteUrl('/')}`);
       if (t === '4') return requestHuman(jid, 'Pediu atendente pelo menu');
       return reply('Não entendi 😅 Responda *1*, *2*, *3* ou *4* (falar com a equipe).\n\n' + mainMenuText(s));
+    }
+    case 'help': {
+      if (t === '1') return startOrdering(jid, s, accepting);
+      if (t === '2') return reply(statusText(ordersFor(jid, phone)));
+      if (t === '3' || t.includes('cardapio')) return reply(`📲 Cardápio completo com fotos: ${siteUrl('/')}`);
+      if (t === '4') return reply('Já avisei a equipe 🙋 Logo alguém entra em contato com você. Enquanto isso: *2* status · *menu* opções.');
+      if (session.data.acked) return; // só registra (a equipe vê no painel)
+      store.saveSession(jid, 'help', { acked: true });
+      return reply('Anotado! 📝 A equipe vai ver sua mensagem. Se quiser, envie *2* para ver o status do pedido ou *menu* para as opções.');
     }
     case 'ordering': {
       const bag = session.data.bag || [];

@@ -86,16 +86,19 @@ test('"oi" no meio de um pedido não apaga a sacola', async () => {
   assert.match(last(), /cancelei o que estava em andamento/);
 });
 
-test('pedir atendente: avisa, pausa o bot e sinaliza no admin', async () => {
+test('pedir atendente: avisa, sinaliza no admin e o bot continua respondendo', async () => {
   await inbound('quero falar com a equipe');
-  assert.match(last(), /atendente humano vai falar com você/);
+  assert.match(last(), /vai entrar em contato com você/);
   assert.strictEqual(store.getChat(JID).human_status, 'requested');
-  const before = countBefore();
   await inbound('meu pedido veio errado');
-  await inbound('1'); // com o bot pausado, nada responde
-  assert.strictEqual(countBefore(), before);
-  const msgs = store.chatMessages(JID).filter((m) => m.direction === 'in');
-  assert.ok(msgs.some((m) => m.body === 'meu pedido veio errado'), 'mensagens continuam sendo guardadas');
+  assert.match(last(), /Anotado/, 'texto livre não abre um pedido novo');
+  const before = countBefore();
+  await inbound('faltou a batata');
+  assert.strictEqual(countBefore(), before, 'depois do primeiro aviso, só registra');
+  assert.ok(store.chatMessages(JID).some((m) => m.direction === 'in' && m.body === 'meu pedido veio errado'), 'mensagens continuam sendo guardadas');
+  await inbound('2');
+  assert.match(last(), /#001/, 'status continua disponível');
+  assert.strictEqual(store.getChat(JID).human_status, 'requested', 'sinal de ajuda continua até a equipe resolver');
   assert.ok(store.getChat(JID).unread >= 2);
 });
 
@@ -105,7 +108,7 @@ test('equipe responde pelo celular: vira "atendendo" e o bot continua pausado; r
   assert.strictEqual(store.getChat(JID).human_status, 'handling');
   assert.ok(store.chatMessages(JID).some((m) => m.direction === 'human'));
   const before = countBefore();
-  await inbound('obrigada');
+  await inbound('obrigada'); // respondendo pelo número do bot: aí sim o bot pausa
   assert.strictEqual(countBefore(), before);
   store.setHuman(JID, 'none');
   await inbound('menu');
@@ -125,7 +128,7 @@ test('cancelar com pedido ativo vai para a equipe (humano resolve)', async () =>
   await inbound('menu');
   await inbound('cancelar');
   assert.strictEqual(store.getChat(JID).human_status, 'requested');
-  assert.match(last(), /atendente humano/);
+  assert.match(last(), /entrar em contato/);
 });
 
 test('comprovante vindo do site é anexado e a conversa é guardada com a mídia', async () => {

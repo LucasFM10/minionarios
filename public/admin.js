@@ -428,8 +428,8 @@
       <div class="cv-h"><div class="cav">${esc(initials(c))}</div><div><div class="nm">${esc(c.name || phoneFmt(c.phone || c.jid.split('@')[0]))}</div><div class="sub">${esc(phoneFmt(c.phone || c.jid.split('@')[0]))}</div></div><span class="sp"></span>
         <button class="btn sm back" id="cvBack" style="display:none">‹ Voltar</button>
         ${c.phone ? `<a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${esc(c.phone)}">Abrir no WhatsApp ↗</a>` : ''}
-        ${st === 'none' ? `<button class="btn sm" data-h="handling">Vou atender (pausar bot)</button>` : `<button class="btn sm green" data-h="none">Resolvido — retomar bot</button>`}</div>
-      ${st === 'requested' ? `<div class="cv-alert">🙋 O cliente pediu ajuda: ${esc(c.human_reason || '')}</div>` : st === 'handling' ? `<div class="cv-alert h">💬 Bot pausado nesta conversa — a equipe está atendendo. Volta sozinho após 8h sem atividade.</div>` : ''}
+        ${st === 'requested' ? `<button class="btn sm green" data-h="none">✓ Marcar como resolvido</button>` : ''}${st === 'handling' ? `<button class="btn sm green" data-h="none">Resolvido — retomar bot</button>` : `<button class="btn sm" data-h="handling" title="Use se for responder pelo número do bot">Pausar bot</button>`}</div>
+      ${st === 'requested' ? `<div class="cv-alert">🙋 O cliente pediu ajuda: ${esc(c.human_reason || '')}<br><small>Entre em contato com ele e marque como resolvido. O bot continua respondendo (status, menu).</small></div>` : st === 'handling' ? `<div class="cv-alert h">💬 Bot pausado nesta conversa — a equipe está atendendo. Volta sozinho após 8h sem atividade.</div>` : ''}
       ${j.orders.length ? `<div class="cv-orders">${j.orders.map((o) => `<button class="btn sm" data-ord="${o.id}">#${String(o.number).padStart(3, '0')} · ${esc(sInfo(o.status).label)} · ${brl(o.total_cents)}</button>`).join('')}</div>` : ''}
       <div class="thread">${body || '<div class="empty-state">Sem mensagens.</div>'}</div>
       <div class="cv-foot">Somente leitura: para responder, use o WhatsApp no celular. Suas mensagens aparecem aqui e o bot fica em silêncio enquanto você atende.</div>`;
@@ -437,7 +437,7 @@
     const bk = $('#cvBack'); if (bk) { bk.style.display = innerWidth < 860 ? '' : 'none'; bk.onclick = () => { $('.chats').classList.remove('open'); openJid = null; renderChatList(); }; }
     $('#chatView').onclick = async (e) => {
       const z = e.target.closest('[data-zoom]'); if (z) { const lb = document.createElement('div'); lb.className = 'lightbox'; lb.innerHTML = `<img src="${z.dataset.zoom}">`; lb.onclick = () => lb.remove(); return document.body.appendChild(lb); }
-      const h = e.target.closest('[data-h]'); if (h) { await api(`/api/admin/chats/${encodeURIComponent(jid)}/human`, json('POST', { status: h.dataset.h })); toast(h.dataset.h === 'none' ? 'Bot retomado nesta conversa' : 'Bot pausado nesta conversa'); refreshChats(); return loadThread(jid); }
+      const h = e.target.closest('[data-h]'); if (h) { await api(`/api/admin/chats/${encodeURIComponent(jid)}/human`, json('POST', { status: h.dataset.h })); toast(h.dataset.h === 'none' ? 'Marcado como resolvido' : 'Bot pausado nesta conversa'); refreshChats(); return loadThread(jid); }
       const o = e.target.closest('[data-ord]'); if (o) { $('[data-tab=orders]').click(); setTimeout(() => openOrder(+o.dataset.ord), 300); }
     };
   }
