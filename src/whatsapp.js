@@ -347,16 +347,21 @@ function requestHuman(jid, reason) {
   return sendText(jid, HELP_REPLY);
 }
 
-/** Pedido ainda sem comprovante ligado a esta conversa. */
-function findAwaitingOrder(jid, phone, session) {
-  let order = session.state === 'receipt' && session.data.order_id ? store.getOrderById(session.data.order_id) : null;
-  if (order && (order.has_receipt || order.status !== 'pedido_feito')) order = null;
-  if (!order) {
-    const recent = store.db.prepare("SELECT id FROM orders WHERE wa_jid = ? AND receipt_path IS NULL AND status = 'pedido_feito' ORDER BY id DESC LIMIT 1").get(jid);
-    if (recent) order = store.getOrderById(recent.id);
-  }
-  if (!order && phone) order = store.findOrdersByPhone(phone, 5).find((o) => !o.has_receipt && o.status === 'pedido_feito') || null;
-  return order;
+/** Pedidos desta conversa/telefone que ainda esperam comprovante (mais antigo primeiro). */
+function awaitingOrders(jid, phone) {
+  const ids = store.db.prepare("SELECT id FROM orders WHERE wa_jid = ? AND receipt_path IS NULL AND status = 'pedido_feito'").all(jid).map((r) => r.id);
+  if (phone) for (const o of store.findOrdersByPhone(phone, 10)) if (!o.has_receipt && o.status === 'pedido_feito') ids.push(o.id);
+  return [...new Set(ids)].sort((a, b) => a - b).map((id) => store.getOrderById(id));
+}
+
+const RECEIPT_OK = (labels) =>
+  `✅ Comprovante recebido para o${labels.length > 1 ? 's' : ''} *pedido${labels.length > 1 ? 's' : ''} ${labels.map((l) => '#' + l).join(' e ')}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Qualquer dúvida, é só falar com a gente por este mesmo número.\n\n*2* — Acompanhar o status do pedido\n*4* — Falar com a equipe\n*menu* — Ver todas as opções`;
+
+function receiptPickText(orders) {
+  const opts = orders.map((o, i) => `*${i + 1}* — Pedido #${o.number_label} (${brl(o.total_cents)})`);
+  const all = orders.reduce((a, o) => a + o.total_cents, 0);
+  opts.push(`*${orders.length + 1}* — ${orders.length === 2 ? 'Dos dois' : 'De todos'} (${brl(all)})`);
+  return `📎 Recebi o comprovante! Você tem mais de um pedido aguardando pagamento.\n\n*Esse comprovante é de qual pedido?*\n${opts.join('\n')}`;
 }
 
 /** Mensagem enviada por uma pessoa da equipe pelo celular do bot: registra e pausa o bot nessa conversa. */
@@ -402,15 +407,19 @@ async function handleMessage(data) {
   // Comprovante: anexa ao pedido que está aguardando (mesmo com o bot pausado, só que sem responder).
   const paused = store.botPaused(jid);
   if (isFile && media) {
-    const order = findAwaitingOrder(jid, phone, session);
-    if (order) {
+    const waiting = awaitingOrders(jid, phone);
+    if (waiting.length === 1) {
+      const order = waiting[0];
       saveReceipt(order.id, media.buf, media.mime);
       if (!order.wa_jid) store.db.prepare('UPDATE orders SET wa_jid = ? WHERE id = ?').run(jid, order.id);
       if (paused) return;
       store.saveSession(jid, 'main', {});
-      return reply(
-        `✅ Comprovante recebido para o *pedido #${order.number_label}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Qualquer dúvida, é só falar com a gente por este mesmo número.\n\n*2* — Acompanhar o status do pedido\n*4* — Falar com a equipe\n*menu* — Ver todas as opções`
-      );
+      return reply(RECEIPT_OK([order.number_label]));
+    }
+    // Mais de um pedido aguardando: pergunta a qual se refere (com o bot pausado, a equipe decide pelo painel).
+    if (waiting.length > 1 && !paused) {
+      store.saveSession(jid, 'receipt_pick', { media_rel: media.rel, mime: media.mime, ids: waiting.map((o) => o.id) });
+      return reply(receiptPickText(waiting));
     }
   }
   if (paused) return; // equipe conversando por este número: o bot só registra
@@ -563,6 +572,20 @@ async function handleMessage(data) {
         return reply('Pedido cancelado. Quando quiser, é só mandar *menu*. 💛');
       }
       return reply('Responda *1* para confirmar, *2* para alterar itens ou *3* para cancelar.');
+    }
+    case 'receipt_pick': {
+      const orders = (session.data.ids || []).map((id) => store.getOrderById(id)).filter((o) => o && !o.has_receipt && o.status === 'pedido_feito');
+      const n = parseInt(t, 10);
+      if (!orders.length) { store.saveSession(jid, 'main', {}); return reply(mainMenuText(s, data.pushName)); }
+      if (!(n >= 1 && n <= orders.length + 1) || String(n) !== t) return reply('Responda só com o número da opção 🙂\n\n' + receiptPickText(orders));
+      const chosen = n === orders.length + 1 ? orders : [orders[n - 1]];
+      const buf = fs.readFileSync(path.join(store.DATA_DIR, 'uploads', session.data.media_rel));
+      for (const o of chosen) {
+        saveReceipt(o.id, buf, session.data.mime);
+        if (!o.wa_jid) store.db.prepare('UPDATE orders SET wa_jid = ? WHERE id = ?').run(jid, o.id);
+      }
+      store.saveSession(jid, 'main', {});
+      return reply(RECEIPT_OK(chosen.map((o) => o.number_label)));
     }
     case 'receipt': {
       const order = store.getOrderById(session.data.order_id);

@@ -137,8 +137,31 @@ test('comprovante vindo do site é anexado e a conversa é guardada com a mídia
   await inbound(`Olá! Quero confirmar meu *pedido #${o.number_label}* da Minionários 🍔\nValor: *R$ 25,00*\nRef: ${o.code.slice(0, 6)}`);
   assert.match(sent.map((m) => m.text).join('\n'), /anexe aqui nesta conversa o comprovante/);
   await inbound('', { message: { imageMessage: { mimetype: 'image/jpeg' }, base64: Buffer.from('fake-jpg').toString('base64') } });
-  assert.match(last(), /Comprovante recebido/);
+  // o #001 (feito pelo chat) também está aguardando: o bot pergunta de qual pedido é
+  assert.match(last(), /Esse comprovante é de qual pedido\?/);
+  assert.match(last(), /\*1\* — Pedido #001/);
+  assert.match(last(), new RegExp(`\\*2\\* — Pedido #${o.number_label}`));
+  assert.match(last(), /\*3\* — Dos dois/);
+  assert.ok(!store.getOrderById(o.id).has_receipt, 'não anexa antes da resposta');
+  await inbound('talvez');
+  assert.match(last(), /Responda só com o número/);
+  await inbound('2');
+  assert.match(last(), new RegExp(`Comprovante recebido para o \\*pedido #${o.number_label}\\*`));
   assert.ok(store.getOrderById(o.id).has_receipt);
+  assert.ok(!store.getOrderByNumber(1).has_receipt, 'o outro pedido continua aguardando');
   const img = store.chatMessages(JID).find((m) => m.kind === 'image' && m.direction === 'in' && m.media_path);
   assert.ok(img, 'imagem guardada na conversa');
+});
+
+test('um único Pix para vários pedidos: "dos dois" anexa o comprovante a todos', async () => {
+  const a = store.createOrder({ customer_name: 'Ana', phone: '83991112222', items: [{ product_id: 1, qty: 1 }], source: 'site' });
+  const img = { message: { imageMessage: { mimetype: 'image/jpeg' }, base64: Buffer.from('pix-unico').toString('base64') } };
+  await inbound('', img);
+  assert.match(last(), /\*3\* — Dos dois/);
+  await inbound('3');
+  assert.match(last(), new RegExp(`pedidos #001 e #${a.number_label}`));
+  assert.ok(store.getOrderByNumber(1).has_receipt && store.getOrderById(a.id).has_receipt);
+  // sem nenhum pedido pendente, não pergunta nada
+  await inbound('', img);
+  assert.match(last(), /não encontrei um pedido aguardando comprovante/);
 });
