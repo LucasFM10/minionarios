@@ -60,6 +60,35 @@ CREATE TABLE IF NOT EXISTS wa_sessions (
   data_json TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE TABLE IF NOT EXISTS geo_cache (
+  q TEXT PRIMARY KEY,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wa_chats (
+  jid TEXT PRIMARY KEY,
+  phone TEXT,
+  name TEXT,
+  human_status TEXT NOT NULL DEFAULT 'none',
+  human_reason TEXT,
+  human_since TEXT,
+  last_at TEXT,
+  last_text TEXT,
+  unread INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wa_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  jid TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
+  body TEXT,
+  media_path TEXT,
+  media_mime TEXT,
+  wa_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_wam_jid ON wa_messages(jid, id);
+CREATE INDEX IF NOT EXISTS idx_wam_waid ON wa_messages(wa_id);
 CREATE TABLE IF NOT EXISTS wa_seen (
   id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -86,7 +115,13 @@ const DEFAULT_SETTINGS = {
   pickup_address: 'R. Marieta Steimbach Silva, 51 – Miramar',
   pickup_city: 'João Pessoa - PB',
   delivery_enabled: '1',
-  delivery_note: 'em João Pessoa, com taxa por bairro a partir de R$ 7,00',
+  delivery_note: 'em João Pessoa, taxa calculada pela distância (R$ 1,00 por km)',
+  delivery_per_km: '1.00',
+  delivery_round: '0.50',
+  delivery_min: '0',
+  delivery_max_km: '25',
+  pickup_lat: '',
+  pickup_lng: '',
   location_note: 'O local da retirada será divulgado no Instagram @minionarios.pspp',
   instagram: 'minionarios.pspp',
   whatsapp_number: '5583988095199',
@@ -109,7 +144,7 @@ for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 const productCols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
 if (!productCols.includes('featured')) db.exec('ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0');
 const orderCols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
-for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER']]) {
+for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER'], ['delivery_km', 'REAL']]) {
   if (!orderCols.includes(c)) db.exec(`ALTER TABLE orders ADD COLUMN ${c} ${def}`);
 }
 if (!productCols.includes('badge')) db.exec("ALTER TABLE products ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
@@ -164,6 +199,11 @@ if (!getSettingRaw('migr_original_v2')) {
   db.prepare("UPDATE settings SET value = 'Retirada ou entrega' WHERE key = 'pickup_label' AND value = 'Retirada no local'").run();
   db.prepare("UPDATE settings SET value = 'Tainara Salustiano Barbosa' WHERE key = 'pix_name' AND value = 'TAINARA'").run();
   insertSetting.run('migr_original_v2', '1');
+}
+
+if (!getSettingRaw('migr_dist_v1')) {
+  db.prepare("UPDATE settings SET value = 'em João Pessoa, taxa calculada pela distância (R$ 1,00 por km)' WHERE key = 'delivery_note' AND value LIKE '%taxa por bairro%'").run();
+  insertSetting.run('migr_dist_v1', '1');
 }
 
 // ---------- Orders ----------
@@ -236,8 +276,8 @@ const createOrderTx = db.transaction((data) => {
   const code = crypto.randomBytes(9).toString('base64url');
   const info = db
     .prepare(
-      `INSERT INTO orders (number, code, customer_name, phone, items_json, total_cents, subtotal_cents, notes, source, wa_jid, receipt_path, receipt_mime, delivery_mode, bairro, address, address_ref, delivery_fee_cents)
-       VALUES (@number, @code, @customer_name, @phone, @items_json, @total_cents, @subtotal_cents, @notes, @source, @wa_jid, @receipt_path, @receipt_mime, @delivery_mode, @bairro, @address, @address_ref, @delivery_fee_cents)`
+      `INSERT INTO orders (number, code, customer_name, phone, items_json, total_cents, subtotal_cents, notes, source, wa_jid, receipt_path, receipt_mime, delivery_mode, bairro, address, address_ref, delivery_fee_cents, delivery_km)
+       VALUES (@number, @code, @customer_name, @phone, @items_json, @total_cents, @subtotal_cents, @notes, @source, @wa_jid, @receipt_path, @receipt_mime, @delivery_mode, @bairro, @address, @address_ref, @delivery_fee_cents, @delivery_km)`
     )
     .run({
       number,
@@ -252,6 +292,7 @@ const createOrderTx = db.transaction((data) => {
       address: delivery.mode === 'entrega' ? String(delivery.address || '').slice(0, 160) : null,
       address_ref: delivery.mode === 'entrega' ? String(delivery.ref || '').slice(0, 160) : null,
       delivery_fee_cents: delivery.mode === 'entrega' ? fee : 0,
+      delivery_km: delivery.mode === 'entrega' ? delivery.km ?? null : null,
       notes: (data.notes || '').trim().slice(0, 300),
       source: data.source || 'site',
       wa_jid: data.wa_jid || null,
@@ -271,20 +312,23 @@ function createOrder(data) {
 }
 
 const BURGER_CATS = ['combos', 'hamburguer', 'hamburgueres', 'lanches'];
-/** Validates delivery info against the bairro table; returns { mode, bairro, fee_cents, address, ref }. */
+const normCat = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+/**
+ * Valida a entrega. O valor da taxa (fee_cents/km) vem SEMPRE de código do servidor (geo.priceDelivery),
+ * nunca do cliente. fee_cents = null significa "a combinar com a equipe".
+ */
 function resolveDelivery(d, items) {
   if (!d || d.mode !== 'entrega') return { mode: 'retirada' };
   if (getSettings().delivery_enabled !== '1') throw new Error('Entrega indisponível. Escolha retirada no local.');
-  const { findBairro, norm } = require('./bairros');
   const hasBurger = (items || []).some((it) => {
     const p = db.prepare('SELECT category FROM products WHERE id = ?').get(Number(it.product_id));
-    return p && BURGER_CATS.includes(norm(p.category));
+    return p && BURGER_CATS.includes(normCat(p.category));
   });
   if (!hasBurger) throw new Error('A entrega vale só para pedidos com pelo menos um hambúrguer ou combo.');
-  const b = findBairro(d.bairro);
-  if (!b) throw new Error('Selecione o seu bairro.');
   if (!d.address || String(d.address).trim().length < 4) throw new Error('Digite a rua e o número.');
-  return { mode: 'entrega', bairro: b.n, fee_cents: b.fee, address: String(d.address).trim(), ref: String(d.ref || '').trim() };
+  const fee = Number.isInteger(d.fee_cents) && d.fee_cents >= 0 ? d.fee_cents : null;
+  const addr = String(d.address).trim() + (d.cep && !/CEP/i.test(d.address) ? ` — CEP ${String(d.cep).replace(/^(\d{5})(\d{3})$/, '$1-$2')}` : '');
+  return { mode: 'entrega', bairro: String(d.bairro || '').trim(), fee_cents: fee, km: Number.isFinite(d.km) ? d.km : null, address: addr, ref: String(d.ref || '').trim() };
 }
 
 const getOrderById = (id) => hydrateOrder(db.prepare('SELECT * FROM orders WHERE id = ?').get(id));
@@ -376,7 +420,50 @@ function markSeen(id) {
   return r.changes > 0;
 }
 
+// ---------- Conversas do WhatsApp (somente para consulta no admin) ----------
+const HELP_AUTO_RESUME_MS = 8 * 3600 * 1000;
+
+function getChat(jid) {
+  const c = db.prepare('SELECT * FROM wa_chats WHERE jid = ?').get(jid);
+  if (!c) return null;
+  // Pausa expira sozinha após 8h sem atividade humana.
+  if (c.human_status !== 'none' && c.human_since && Date.now() - Date.parse(c.human_since) > HELP_AUTO_RESUME_MS) {
+    db.prepare("UPDATE wa_chats SET human_status = 'none', human_reason = NULL WHERE jid = ?").run(jid);
+    c.human_status = 'none'; c.human_reason = null;
+  }
+  return c;
+}
+
+function logMessage({ jid, direction, kind = 'text', body = '', media_path = null, media_mime = null, wa_id = null, phone = null, name = null }) {
+  const info = db.prepare('INSERT INTO wa_messages (jid, direction, kind, body, media_path, media_mime, wa_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(jid, direction, kind, body, media_path, media_mime, wa_id);
+  const preview = body ? String(body).replace(/\s+/g, ' ').slice(0, 90) : ({ image: '📷 Foto', audio: '🎤 Áudio', video: '🎥 Vídeo', document: '📄 Documento', sticker: 'Figurinha' }[kind] || '');
+  db.prepare(`INSERT INTO wa_chats (jid, phone, name, last_at, last_text, unread) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?)
+    ON CONFLICT(jid) DO UPDATE SET last_at = excluded.last_at, last_text = excluded.last_text,
+      phone = COALESCE(excluded.phone, wa_chats.phone), name = COALESCE(excluded.name, wa_chats.name),
+      unread = wa_chats.unread + excluded.unread`).run(jid, phone, name, preview, direction === 'in' ? 1 : 0);
+  return info.lastInsertRowid;
+}
+const messageSeen = (waId) => !!waId && !!db.prepare('SELECT 1 FROM wa_messages WHERE wa_id = ?').get(waId);
+
+/** status: 'none' | 'requested' (cliente pediu ajuda) | 'handling' (equipe atendendo). Ambos pausam o bot. */
+function setHuman(jid, status, reason = null) {
+  db.prepare(`INSERT INTO wa_chats (jid, human_status, human_reason, human_since) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(jid) DO UPDATE SET human_status = excluded.human_status, human_reason = excluded.human_reason, human_since = excluded.human_since`).run(jid, status, status === 'none' ? null : reason);
+}
+const touchHuman = (jid) => db.prepare("UPDATE wa_chats SET human_since = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE jid = ?").run(jid);
+const botPaused = (jid) => { const c = getChat(jid); return !!c && c.human_status !== 'none'; };
+
+function listChats() {
+  const rows = db.prepare('SELECT * FROM wa_chats WHERE last_at IS NOT NULL ORDER BY last_at DESC LIMIT 200').all();
+  return rows.map((c) => ({ ...getChat(c.jid), orders: db.prepare('SELECT number, status FROM orders WHERE wa_jid = ? ORDER BY id DESC LIMIT 3').all(c.jid) }));
+}
+const chatMessages = (jid, limit = 300) => db.prepare('SELECT * FROM (SELECT * FROM wa_messages WHERE jid = ? ORDER BY id DESC LIMIT ?) ORDER BY id').all(jid, limit);
+const markChatRead = (jid) => db.prepare('UPDATE wa_chats SET unread = 0 WHERE jid = ?').run(jid);
+/** Estado de atendimento por conversa, para os cartões de pedido. */
+const chatStates = () => Object.fromEntries(db.prepare('SELECT jid, human_status, unread FROM wa_chats').all().map((c) => [c.jid, c]));
+
 module.exports = {
+  getChat, logMessage, messageSeen, setHuman, touchHuman, botPaused, listChats, chatMessages, markChatRead, chatStates,
   db,
   DATA_DIR,
   STATUSES,

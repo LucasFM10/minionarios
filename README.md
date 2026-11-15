@@ -39,6 +39,14 @@ Fluxo do site: o cliente fecha o pedido (gera o número), toca em **Concluir ped
 2. Clique **Criar instância** (cria a instância e registra o webhook `PUBLIC_URL/api/whatsapp/webhook`).
 3. Clique **Mostrar QR Code** e leia com o WhatsApp da equipe (Aparelhos conectados).
 
+### Regras do bot
+
+- **Nunca envia mensagem por conta própria**: só responde a quem escreveu primeiro (evita banimento). Mudanças de status no painel não geram aviso automático — a equipe avisa manualmente.
+- **Falar com a equipe** (opção *4*, "atendente", "cancelar" com pedido ativo): o bot avisa que um humano vai responder e **pausa**. O painel marca "🙋 Pediu ajuda". Se a equipe responder pelo celular, vira "💬 Equipe atendendo". Em *Conversas* use "Resolvido — retomar bot" (retoma sozinho após 8 h).
+- **Conversas**: todas as mensagens e mídias (comprovantes, fotos) ficam salvas e aparecem em *Admin › Conversas* (somente leitura).
+- **Taxa de entrega**: distância de carro (OpenStreetMap/Nominatim + OSRM) × R$ 1,00/km, arredondada para cima de R$ 0,50. Ajustável em *Ajustes* (valor/km, arredondamento, taxa mínima, distância máxima, coordenadas da retirada). Se o endereço não for localizado, fica "taxa a combinar".
+- Pedidos sem comprovante há mais de 2 h aparecem destacados no painel.
+
 ## Deploy
 
 `Dockerfile` pronto (porta 3000, healthcheck em `/api/health`). No Coolify, use build pack *Dockerfile* e um volume persistente em `/app/data`.

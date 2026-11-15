@@ -1,11 +1,13 @@
-// WhatsApp bot over Evolution API v2. Purely reactive: it only answers messages
-// it receives (optional status notifications can be enabled in the admin).
+// WhatsApp bot over Evolution API v2. 100% reativo: só responde a quem escreveu primeiro
+// (nenhuma mensagem automática é enviada por iniciativa do sistema — evita banimento).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const store = require('./db');
 const { buildPixPayload, pixQrPng } = require('./pix');
-const { BAIRROS, findBairro, norm: normB } = require('./bairros');
+const geo = require('./geo');
+const normB = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+fs.mkdirSync(path.join(store.DATA_DIR, 'uploads', 'chat'), { recursive: true });
 
 const cfg = () => ({
   url: (process.env.EVOLUTION_URL || '').replace(/\/+$/, ''),
@@ -98,11 +100,16 @@ async function logout() {
 }
 
 // ---------- Sending ----------
+const lastBot = new Map(); // jid -> quando o bot falou por último (para não confundir o eco com resposta humana)
 async function sendText(to, text) {
-  return evo('POST', `/message/sendText/${cfg().instance}`, { number: to, text });
+  lastBot.set(to, Date.now());
+  const r = await evo('POST', `/message/sendText/${cfg().instance}`, { number: to, text });
+  store.logMessage({ jid: to, direction: 'out', kind: 'text', body: text, wa_id: r?.key?.id || null });
+  return r;
 }
 async function sendImage(to, pngBuffer, caption) {
-  return evo('POST', `/message/sendMedia/${cfg().instance}`, {
+  lastBot.set(to, Date.now());
+  const r = await evo('POST', `/message/sendMedia/${cfg().instance}`, {
     number: to,
     mediatype: 'image',
     mimetype: 'image/png',
@@ -110,6 +117,8 @@ async function sendImage(to, pngBuffer, caption) {
     media: pngBuffer.toString('base64'),
     fileName: 'pix.png',
   });
+  store.logMessage({ jid: to, direction: 'out', kind: 'image', body: caption, wa_id: r?.key?.id || null });
+  return r;
 }
 
 const fmtPhone = (p) => {
@@ -204,7 +213,11 @@ function statusText(orders) {
   );
 }
 
-const OPTIONS_TEXT = `*O que você pode fazer por aqui:*\n*2* — Acompanhar o status do pedido\n*pix* — Receber o código Pix de novo\n*menu* — Ver todas as opções`;
+const kmTxt = (km) => (km ? ` (≈ ${String(km).replace('.', ',')} km)` : '');
+const feeTxt = (o) => (o.delivery_fee_cents == null ? 'a combinar com a equipe' : brl(o.delivery_fee_cents) + kmTxt(o.delivery_km));
+const deliveryLine = (o) => `🛵 Entrega${o.bairro ? ' · ' + o.bairro : ''} — ${o.address}${o.address_ref ? ` (${o.address_ref})` : ''}\n      Taxa: ${feeTxt(o)}`;
+
+const OPTIONS_TEXT = `*O que você pode fazer por aqui:*\n*2* — Acompanhar o status do pedido\n*pix* — Receber o código Pix de novo\n*4* — Falar com a equipe\n*menu* — Ver todas as opções`;
 
 /** Customer came from the site with "pedido #012 ... Ref: abc123". */
 async function confirmSiteOrder(jid, phone, number, ref, pushName) {
@@ -222,7 +235,7 @@ async function confirmSiteOrder(jid, phone, number, ref, pushName) {
   const ent = o.delivery_mode === 'entrega';
   const itens = o.items.map((l) => `• ${l.qty}x ${l.name} — ${brl(l.subtotal_cents)}`).join('\n');
   const recv = ent
-    ? `🛵 Entrega · ${o.bairro} — ${o.address}${o.address_ref ? ` (${o.address_ref})` : ''}\n      Taxa: ${o.delivery_fee_cents == null ? 'a combinar com a equipe' : brl(o.delivery_fee_cents)}`
+    ? deliveryLine(o)
     : `📍 Retirada no local${s.pickup_address ? ` — ${s.pickup_address}` : ''}`;
   await sendText(jid, `Oi${first ? ', ' + first : ''}! 💛💙 Recebemos o seu *pedido #${o.number_label}*.\n\n${itens}\n${recv}\n\n*Total: ${brl(o.total_cents)}*`);
   if (o.has_receipt || o.status !== 'pedido_feito') {
@@ -243,24 +256,37 @@ function mainMenuText(s, name) {
   return (
     `Olá${name ? ', ' + name.split(' ')[0] : ''}! 💛💙 Aqui é a equipe *${s.team_name}* — ${s.tagline}.\n\n` +
     `🍔 Pré-venda para *${s.event_date_label}* · ${s.pickup_label}\n\n` +
-    `Responda com o número:\n*1* — Fazer pedido\n*2* — Acompanhar meu pedido\n*3* — Ver cardápio no site\n\n` +
+    `Responda com o número:\n*1* — Fazer pedido\n*2* — Acompanhar meu pedido\n*3* — Ver cardápio no site\n*4* — Falar com a equipe (dúvidas, cancelar ou alterar pedido)\n\n` +
     `_A qualquer momento, envie *menu* para voltar aqui._`
   );
 }
 
-async function downloadMedia(data) {
+const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'video/mp4': 'mp4' };
+function mediaPart(msg) {
+  const m = msg?.documentWithCaptionMessage?.message || msg || {};
+  if (m.imageMessage) return { kind: 'image', part: m.imageMessage };
+  if (m.videoMessage) return { kind: 'video', part: m.videoMessage };
+  if (m.audioMessage) return { kind: 'audio', part: m.audioMessage };
+  if (m.documentMessage) return { kind: 'document', part: m.documentMessage };
+  if (m.stickerMessage) return { kind: 'sticker', part: m.stickerMessage };
+  return { kind: 'text', part: null };
+}
+
+/** Baixa a mídia recebida e guarda em uploads/chat. Devolve { rel, mime } ou null. */
+async function saveInboundMedia(data, mp) {
   let b64 = data.message?.base64 || data.base64;
-  let mime = data.message?.imageMessage?.mimetype || data.message?.documentMessage?.mimetype || 'image/jpeg';
+  let mime = (mp.part.mimetype || '').split(';')[0] || 'application/octet-stream';
   if (!b64) {
-    const r = await evo('POST', `/chat/getBase64FromMediaMessage/${cfg().instance}`, {
-      message: { key: data.key },
-      convertToMp4: false,
-    });
+    const r = await evo('POST', `/chat/getBase64FromMediaMessage/${cfg().instance}`, { message: { key: data.key }, convertToMp4: false });
     b64 = r.base64;
-    mime = r.mimetype || mime;
+    mime = (r.mimetype || mime).split(';')[0];
   }
-  if (!b64) throw new Error('mídia sem conteúdo');
-  return { buf: Buffer.from(b64.replace(/^data:[^,]+,/, ''), 'base64'), mime };
+  if (!b64) return null;
+  const buf = Buffer.from(String(b64).replace(/^data:[^,]+,/, ''), 'base64');
+  if (!buf.length || buf.length > 25 * 1024 * 1024) return null;
+  const rel = `chat/${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${EXT[mime] || 'bin'}`;
+  fs.writeFileSync(path.join(store.DATA_DIR, 'uploads', rel), buf);
+  return { rel, mime, buf };
 }
 
 function saveReceipt(orderId, buf, mime) {
@@ -282,7 +308,7 @@ async function sendPix(jid, order, s) {
   await sendImage(
     jid,
     png,
-    `*Pedido #${order.number_label}* registrado! 🎉\n\n${order.delivery_mode === 'entrega' ? bagText(order.items).replace('*Total:', '*Itens:') : bagText(order.items)}${order.delivery_mode === 'entrega' ? `\n🛵 Entrega (${order.bairro}): ${order.delivery_fee_cents == null ? 'taxa a combinar' : brl(order.delivery_fee_cents)}` : ''}\n\n` +
+    `*Pedido #${order.number_label}* registrado! 🎉\n\n${order.delivery_mode === 'entrega' ? bagText(order.items).replace('*Total:', '*Itens:') : bagText(order.items)}${order.delivery_mode === 'entrega' ? `\n🛵 Taxa de entrega: ${feeTxt(order)}` : ''}\n\n` +
       `💠 Pague *${brl(order.total_cents)}* via Pix (QR Code acima ou o código *copia e cola* da próxima mensagem).\n` +
       `Recebedor: ${s.pix_name} · Chave: ${s.pix_key}`
   );
@@ -307,42 +333,86 @@ async function handleWebhook(body) {
   }
 }
 
+const IN_PROGRESS = ['ordering', 'name', 'phone', 'mode', 'address', 'confirm'];
+const HELP_RE = /\b(atendente|humano|ajuda|suporte|reclama\w*|problema|falar com (a |um |uma )?(equipe|atendente|humano|pessoa)|(cancelar|alterar|trocar|mudar) (o |meu |esse |este )?pedido)\b/;
+
+const HELP_REPLY = `🙋 Certo! Avisei a equipe — *um atendente humano vai falar com você por aqui em seguida*.\n\nEnquanto isso, pode já escrever sua dúvida ou problema, que ela chega direto para eles. _(Pausei as respostas automáticas.)_`;
+function requestHuman(jid, reason) {
+  store.setHuman(jid, 'requested', reason);
+  return sendText(jid, HELP_REPLY);
+}
+
+/** Pedido ainda sem comprovante ligado a esta conversa. */
+function findAwaitingOrder(jid, phone, session) {
+  let order = session.state === 'receipt' && session.data.order_id ? store.getOrderById(session.data.order_id) : null;
+  if (order && (order.has_receipt || order.status !== 'pedido_feito')) order = null;
+  if (!order) {
+    const recent = store.db.prepare("SELECT id FROM orders WHERE wa_jid = ? AND receipt_path IS NULL AND status = 'pedido_feito' ORDER BY id DESC LIMIT 1").get(jid);
+    if (recent) order = store.getOrderById(recent.id);
+  }
+  if (!order && phone) order = store.findOrdersByPhone(phone, 5).find((o) => !o.has_receipt && o.status === 'pedido_feito') || null;
+  return order;
+}
+
+/** Mensagem enviada por uma pessoa da equipe pelo próprio celular: registra e pausa o bot nessa conversa. */
+function handleOwnMessage(data, jid) {
+  const waId = data.key.id;
+  if (store.messageSeen(waId) || !store.markSeen(waId)) return;
+  if (Date.now() - (lastBot.get(jid) || 0) < 4000) return; // eco do que o próprio bot acabou de enviar
+  const mp = mediaPart(data.message || {});
+  const body = extractText(data.message || {}).trim();
+  if (mp.kind === 'text' && !body) return;
+  store.logMessage({ jid, direction: 'human', kind: mp.kind, body, wa_id: waId });
+  const c = store.getChat(jid);
+  if (!c || c.human_status !== 'handling') store.setHuman(jid, 'handling', 'Equipe respondeu pelo celular');
+  else store.touchHuman(jid);
+}
+
 async function handleMessage(data) {
-  if (!data?.key || data.key.fromMe) return;
+  if (!data?.key) return;
   const jid = data.key.remoteJid || '';
   if (jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return;
+  if (data.key.fromMe) return handleOwnMessage(data, jid);
   if (!store.markSeen(data.key.id)) return;
 
   const s = store.getSettings();
   const msg = data.message || {};
   const text = extractText(msg).trim();
   const t = norm(text);
-  const hasMedia = !!(msg.imageMessage || msg.documentMessage || msg.documentWithCaptionMessage);
+  const mp = mediaPart(msg);
   const phone = resolvePhone(data);
-  const session = store.getSession(jid);
-  const reply = (txt) => sendText(jid, txt);
   const accepting = s.accepting_orders === '1';
 
-  // Receipt: in "receipt" state, or any media while the latest order has none.
-  if (hasMedia) {
-    let order = session.state === 'receipt' && session.data.order_id ? store.getOrderById(session.data.order_id) : null;
-    if (!order) {
-      const recent = store.db.prepare("SELECT id FROM orders WHERE wa_jid = ? AND receipt_path IS NULL AND status = 'pedido_feito' ORDER BY id DESC LIMIT 1").get(jid);
-      if (recent) order = store.getOrderById(recent.id);
-    }
-    if (!order && phone) order = store.findOrdersByPhone(phone, 5).find((o) => !o.has_receipt && o.status === 'pedido_feito') || null;
+  // Guarda tudo o que o cliente mandou (inclusive mídia) para consulta no admin.
+  let media = null;
+  if (mp.kind !== 'text' && mp.kind !== 'sticker') {
+    try { media = await saveInboundMedia(data, mp); } catch (e) { console.error('[wa] mídia não baixada:', e.message); }
+  }
+  store.logMessage({ jid, direction: 'in', kind: mp.kind, body: text, media_path: media?.rel || null, media_mime: media?.mime || null, wa_id: data.key.id, phone, name: data.pushName || null });
+
+  const session = store.getSession(jid);
+  const reply = (txt) => sendText(jid, txt);
+  const isFile = mp.kind === 'image' || mp.kind === 'document';
+
+  // Comprovante: anexa ao pedido que está aguardando (mesmo com o bot pausado, só que sem responder).
+  const paused = store.botPaused(jid);
+  if (isFile && media) {
+    const order = findAwaitingOrder(jid, phone, session);
     if (order) {
-      const m = msg.documentWithCaptionMessage ? { ...data, message: { ...msg, ...msg.documentWithCaptionMessage.message } } : data;
-      const { buf, mime } = await downloadMedia(m);
-      saveReceipt(order.id, buf, mime);
+      saveReceipt(order.id, media.buf, media.mime);
       if (!order.wa_jid) store.db.prepare('UPDATE orders SET wa_jid = ? WHERE id = ?').run(jid, order.id);
+      if (paused) return;
       store.saveSession(jid, 'main', {});
       return reply(
-        `✅ Comprovante recebido para o *pedido #${order.number_label}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Qualquer dúvida, é só falar com a gente por este mesmo número.\n\n*2* — Acompanhar o status do pedido\n*menu* — Ver todas as opções`
+        `✅ Comprovante recebido para o *pedido #${order.number_label}*!\n\nAssim que a equipe conferir o pagamento, o status muda para *Pagamento confirmado*. Qualquer dúvida, é só falar com a gente por este mesmo número.\n\n*2* — Acompanhar o status do pedido\n*4* — Falar com a equipe\n*menu* — Ver todas as opções`
       );
     }
-    if (!text) return reply('Recebi seu arquivo, mas não encontrei um pedido aguardando comprovante. Envie *menu* para começar.');
   }
+  if (paused) return; // atendente humano em ação: o bot só registra
+  if (isFile && !media && !text) return reply('Não consegui abrir esse arquivo 😕 Pode enviar de novo? Se preferir, envie *4* para falar com a equipe.');
+  if (isFile && !text) return reply('Recebi seu arquivo, mas não encontrei um pedido aguardando comprovante. Envie *menu* para começar ou *4* para falar com a equipe.');
+  if (mp.kind === 'audio' || mp.kind === 'video') return reply('Por aqui eu só entendo mensagens de texto e comprovantes (foto ou PDF) 😅 Para falar com um atendente, envie *4*.');
+  if (mp.kind === 'sticker' && !text) return;
 
   // Order coming from the site: "pedido #012 ... Ref: abc123"
   const siteM = text.match(/pedido\s*\*?\s*#\s*(\d{1,4})/i);
@@ -351,10 +421,31 @@ async function handleMessage(data) {
     return confirmSiteOrder(jid, phone, parseInt(siteM[1], 10), refM && refM[1], data.pushName);
   }
 
+  // Falar com a equipe (palavras-chave; o "4" é tratado em cada estado onde faz sentido)
+  if (HELP_RE.test(t) && !(session.state === 'ordering' && parseItems(text))) {
+    const why = /(cancelar|alterar|trocar|mudar)/.test(t) ? 'Quer cancelar/alterar um pedido' : 'Pediu para falar com a equipe';
+    return requestHuman(jid, `${why}: "${text.slice(0, 120)}"`);
+  }
+
   // Global commands
-  if (['menu', 'inicio', 'voltar', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite', 'cancelar'].includes(t)) {
+  const GREET = ['menu', 'inicio', 'voltar', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'];
+  const inProgress = IN_PROGRESS.includes(session.state);
+  if (t === 'cancelar') {
+    if (inProgress) {
+      store.saveSession(jid, 'main', {});
+      return reply('Tudo bem, cancelei o que estava em andamento.\n\n' + mainMenuText(s, data.pushName));
+    }
+    if (ordersFor(jid, phone).some((o) => !['cancelado', 'concluido'].includes(o.status))) return requestHuman(jid, 'Pediu para cancelar um pedido');
     store.saveSession(jid, 'main', {});
-    return reply((t === 'cancelar' ? 'Tudo bem, cancelei o que estava em andamento.\n\n' : '') + mainMenuText(s, data.pushName));
+    return reply(mainMenuText(s, data.pushName));
+  }
+  if (GREET.includes(t)) {
+    if (inProgress) {
+      const bag = session.data.bag || [];
+      return reply(`Você está no meio de um pedido 🛍️\n\n${bag.length ? bagText(bag) + '\n\n' : ''}Pode continuar de onde parou. Para desistir e recomeçar, envie *cancelar*. Para falar com a equipe, envie *atendente*.`);
+    }
+    store.saveSession(jid, 'main', {});
+    return reply(mainMenuText(s, data.pushName));
   }
   if (['status', 'meu pedido', 'acompanhar', 'consultar'].includes(t) || /^status\s*#?\d+$/.test(t)) {
     return reply(statusText(ordersFor(jid, phone)));
@@ -365,7 +456,8 @@ async function handleMessage(data) {
       if (t === '1' || t.includes('pedido') || t.includes('pedir')) return startOrdering(jid, s, accepting);
       if (t === '2') return reply(statusText(ordersFor(jid, phone)));
       if (t === '3' || t.includes('cardapio')) return reply(`📲 Cardápio completo com fotos: ${siteUrl('/')}`);
-      return reply('Não entendi 😅 Responda *1*, *2* ou *3*.\n\n' + mainMenuText(s));
+      if (t === '4') return requestHuman(jid, 'Pediu atendente pelo menu');
+      return reply('Não entendi 😅 Responda *1*, *2*, *3* ou *4* (falar com a equipe).\n\n' + mainMenuText(s));
     }
     case 'ordering': {
       const bag = session.data.bag || [];
@@ -396,7 +488,7 @@ async function handleMessage(data) {
     case 'name': {
       let name = text;
       if (t === '1' && data.pushName) name = data.pushName;
-      if (!name || name.length < 2 || /^\d+$/.test(name)) return reply('Por favor, envie o *nome* de quem vai retirar o pedido.');
+      if (!name || name.length < 2 || /^\d+$/.test(name)) return reply('Por favor, envie o *nome* para o pedido.');
       const next = { ...session.data, name: name.slice(0, 80) };
       if (!phone) {
         store.saveSession(jid, 'phone', next);
@@ -412,29 +504,19 @@ async function handleMessage(data) {
     case 'mode': {
       if (t === '1' || t.includes('retir')) return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
       if (t === '2' || t.includes('entreg') || t.includes('casa')) {
-        store.saveSession(jid, 'bairro', session.data);
-        return reply('🛵 Qual o seu *bairro* em João Pessoa? (ex.: Manaíra)');
+        store.saveSession(jid, 'address', session.data);
+        return reply('🛵 Envie o seu *endereço completo*: rua, número e bairro (e o CEP, se souber) — e um ponto de referência, se quiser.\n\nA taxa de entrega é calculada pela distância.');
       }
       return reply('Responda *1* para retirar no local ou *2* para receber em casa.');
     }
-    case 'bairro': {
-      const cands = session.data.cands || [];
-      let b = /^\d+$/.test(t) && cands[+t - 1] ? findBairro(cands[+t - 1]) : findBairro(text);
-      if (!b) {
-        const q = normB(text);
-        const found = q.length >= 3 ? BAIRROS.filter((x) => normB(x.n).includes(q)) : [];
-        if (found.length === 1) b = found[0];
-        else if (found.length > 1) {
-          store.saveSession(jid, 'bairro', { ...session.data, cands: found.slice(0, 9).map((x) => x.n) });
-          return reply('Qual desses?\n' + found.slice(0, 9).map((x, i) => `*${i + 1}* — ${x.n}`).join('\n'));
-        } else return reply('Não encontrei esse bairro 🤔 Envie o nome do bairro (ex.: *Tambaú*, *Bancários*) ou *1* para voltar e retirar no local.');
-      }
-      store.saveSession(jid, 'address', { ...session.data, cands: undefined, bairro: b.n });
-      return reply(`${b.fee == null ? `📍 *${b.n}* fica a mais de 5 km — a taxa de entrega é combinada com a equipe.` : `📍 Taxa de entrega para *${b.n}*: *${brl(b.fee)}*.`}\n\nAgora envie *rua, número* e um ponto de referência.`);
-    }
     case 'address': {
-      if (text.length < 4) return reply('Envie a *rua e o número* (e um ponto de referência, se quiser).');
-      return askConfirm(jid, { ...session.data, delivery: { mode: 'entrega', bairro: session.data.bairro, address: text.slice(0, 160) } });
+      if (t === '1') return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
+      if (text.length < 6) return reply('Envie a *rua, o número e o bairro* (ou *1* para retirar no local).');
+      const cepM = text.match(/\b\d{5}-?\d{3}\b/);
+      const addr = text.replace(cepM ? cepM[0] : '', '').replace(/\s+/g, ' ').replace(/[,\s]+$/, '').trim().slice(0, 160);
+      const parts = addr.split(',').map((x) => x.trim()).filter(Boolean);
+      const delivery = await geo.priceDelivery({ address: addr, cep: cepM ? cepM[0] : '', bairro: parts.length >= 3 ? parts[parts.length - 1] : '' });
+      return askConfirm(jid, { ...session.data, delivery });
     }
     case 'confirm': {
       if (t === '1' || t === 'sim' || t === 'confirmar') {
@@ -472,7 +554,8 @@ async function handleMessage(data) {
       const order = store.getOrderById(session.data.order_id);
       if (t === '2') return reply(statusText(order ? [order] : []));
       if (t === 'pix' && order) return sendPix(jid, order, s);
-      return reply(`Estou aguardando a *foto ou PDF do comprovante* do pedido #${order?.number_label || ''} 📎\nEnvie *pix* para receber o código de novo, *2* para ver o status ou *menu* para voltar.`);
+      if (t === '4') return requestHuman(jid, 'Pediu atendente pelo menu');
+      return reply(`Estou aguardando a *foto ou PDF do comprovante* do pedido #${order?.number_label || ''} 📎\nEnvie *pix* para receber o código de novo, *2* para ver o status, *4* para falar com a equipe ou *menu* para voltar.`);
     }
     default: {
       store.saveSession(jid, 'main', {});
@@ -518,9 +601,8 @@ function askConfirm(jid, data) {
   let recv = `📍 Retirada no local${s.pickup_address ? ` — ${s.pickup_address}` : ''}`;
   let tot = '';
   if (d.mode === 'entrega') {
-    const b = findBairro(d.bairro);
-    recv = `🛵 Entrega · ${d.bairro}\n      ${d.address}\n      Taxa: ${b && b.fee != null ? brl(b.fee) : 'a combinar'}`;
-    tot = `\n*Total no Pix: ${brl(sub + (b && b.fee ? b.fee : 0))}*`;
+    recv = `🛵 Entrega\n      ${d.address}${d.ref ? ` (${d.ref})` : ''}\n      Taxa: ${d.fee_cents == null ? 'a combinar com a equipe' : brl(d.fee_cents) + kmTxt(d.km)}`;
+    tot = d.fee_cents == null ? '' : `\n*Total no Pix: ${brl(sub + d.fee_cents)}*`;
   }
   return sendText(
     jid,
@@ -528,29 +610,9 @@ function askConfirm(jid, data) {
   );
 }
 
-// ---------- Outbound notification (optional) ----------
-async function notifyStatus(order) {
-  const s = store.getSettings();
-  if (s.notify_status_whatsapp !== '1' || !isConfigured()) return;
-  const to = order.wa_jid || order.phone;
-  if (!to) return;
-  const msgs = {
-    pagamento_confirmado: `💸 Pagamento do *pedido #${order.number_label}* confirmado! Obrigado 💛💙`,
-    em_preparo: `👨‍🍳 Seu *pedido #${order.number_label}* está em preparo!`,
-    saiu_para_entrega: `🛵 Seu *pedido #${order.number_label}* saiu para a entrega / está pronto para retirada!`,
-    concluido: `✅ *Pedido #${order.number_label}* concluído. Bom apetite e obrigado por ajudar na arrecadação! 🙏`,
-    cancelado: `❌ O *pedido #${order.number_label}* foi cancelado. Em caso de dúvida, responda esta mensagem.`,
-  };
-  if (!msgs[order.status]) return;
-  try {
-    await sendText(to, msgs[order.status] + `\n\nAcompanhe: ${siteUrl('/pedido?c=' + order.code)}`);
-  } catch (e) {
-    console.error('[wa] falha ao notificar:', e.message);
-  }
-}
-
 module.exports = {
   handleWebhook,
+  _lastBot: lastBot,
   webhookSecret,
   webhookUrl,
   isConfigured,
@@ -558,7 +620,6 @@ module.exports = {
   setupInstance,
   getQr,
   logout,
-  notifyStatus,
   parseItems,
   cfg,
 };

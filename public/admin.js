@@ -15,6 +15,7 @@
   const ls = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 
   let statuses = [], orders = [], stats = null, knownIds = null, poll = null;
+  let attnFilter = null, helpCount = 0, unreadCount = 0, openJid = null;
   let q = '', recv = 'all', view = ls.get('adm_view', innerWidth < 860 ? 'list' : 'board'), sound = ls.get('adm_sound', true);
   let openId = null;
   const FLOW = ['pedido_feito', 'pagamento_confirmado', 'em_preparo', 'saiu_para_entrega', 'concluido'];
@@ -56,7 +57,7 @@
     const b = e.target.closest('button'); if (!b) return;
     $$('#nav button').forEach((x) => x.classList.toggle('on', x === b));
     $$('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
-    ({ orders: loadOrders, summary: loadSummary, products: loadProducts, settings: loadSettings, whatsapp: loadWa })[b.dataset.tab]();
+    ({ orders: loadOrders, chats: loadChats, summary: loadSummary, products: loadProducts, settings: loadSettings, whatsapp: loadWa })[b.dataset.tab]();
     scrollTo(0, 0);
   };
 
@@ -77,7 +78,7 @@
   /* ---------- orders ---------- */
   async function loadOrders() {
     let j; try { j = await api('/api/admin/orders'); } catch { return; }
-    statuses = j.statuses; stats = j.stats;
+    statuses = j.statuses; stats = j.stats; helpCount = j.help || 0; unreadCount = j.unread || 0; paintChatBadge();
     const fresh = knownIds ? j.orders.filter((o) => !knownIds.has(o.id)) : [];
     knownIds = new Set(j.orders.map((o) => o.id));
     orders = j.orders;
@@ -88,7 +89,8 @@
     const pending = orders.filter((o) => o.status === 'pedido_feito').length;
     $('#navBadge').hidden = !pending; $('#navBadge').textContent = pending;
     $('#liveInfo').innerHTML = `<span class="live"></span>Ao vivo · atualizado às ${hhmm(new Date().toISOString())}`;
-    if (tab() === 'orders') { renderKpis(); renderOrders(new Set(fresh.map((o) => o.id))); }
+    if (tab() === 'orders') { renderKpis(); renderAttn(); renderOrders(new Set(fresh.map((o) => o.id))); }
+    if (tab() === 'chats') refreshChats();
     if (openId && !$('#drawer').classList.contains('on')) openId = null;
   }
 
@@ -104,10 +106,30 @@
       <div class="kpi"><span>Pagamentos confirmados</span><b>${brl(stats.totals.confirmed)}</b><small>de ${brl(stats.totals.gross)} em pedidos</small></div>`;
   }
 
+  const STALE_MS = 2 * 3600 * 1000;
+  const isStale = (o) => o.status === 'pedido_feito' && !o.has_receipt && Date.now() - Date.parse(o.created_at) > STALE_MS;
+  const needsHelp = (o) => o.chat?.human_status === 'requested';
+  const noWa = (o) => o.source === 'site' && !o.wa_jid && o.status === 'pedido_feito';
+  function paintChatBadge() { const e = $('#chatBadge'); const n = helpCount || unreadCount; e.hidden = !n; e.textContent = helpCount ? '!' : unreadCount; e.style.background = helpCount ? 'var(--s6)' : 'var(--s5)'; }
+  function renderAttn() {
+    const h = orders.filter(needsHelp).length, st = orders.filter(isStale).length, nw = orders.filter(noWa).length;
+    const el = $('#attn'); el.hidden = !(h || st || nw || helpCount);
+    const b = (k, cls, txt) => `<button class="${cls} ${attnFilter === k ? 'on' : ''}" data-attn="${k}">${txt}</button>`;
+    el.innerHTML = (helpCount ? `<button class="help" data-attn="chat">🙋 ${helpCount} cliente(s) pedindo ajuda — ver conversas</button>` : '') + (h ? b('help', 'help', `🙋 ${h} pedido(s) com cliente pedindo ajuda`) : '') + (st ? b('stale', 'stale', `⏰ ${st} sem comprovante há mais de 2h`) : '') + (nw ? b('nowa', 'wa', `💬 ${nw} ainda não chamaram no WhatsApp`) : '');
+  }
+  $('#attn').onclick = (e) => {
+    const b = e.target.closest('[data-attn]'); if (!b) return;
+    if (b.dataset.attn === 'chat') return $('[data-tab=chats]').click();
+    attnFilter = attnFilter === b.dataset.attn ? null : b.dataset.attn; renderAttn(); renderOrders();
+  };
+
   const filtered = () => {
     const t = q.trim().toLowerCase(), digits = t.replace(/\D/g, '');
     return orders.filter((o) => {
       if (recv !== 'all' && (o.delivery_mode || 'retirada') !== recv) return false;
+      if (attnFilter === 'help' && !needsHelp(o)) return false;
+      if (attnFilter === 'stale' && !isStale(o)) return false;
+      if (attnFilter === 'nowa' && !noWa(o)) return false;
       if (!t) return true;
       return o.customer_name.toLowerCase().includes(t) || (o.bairro || '').toLowerCase().includes(t) || (digits && (o.phone.includes(digits) || o.number === +digits));
     });
@@ -115,7 +137,10 @@
   const itemsTxt = (o) => o.items.map((l) => `${l.qty}× ${l.name}`).join(' · ');
   function tagsHtml(o) {
     const t = [];
-    t.push(o.delivery_mode === 'entrega' ? `<span class="tag deliv">🛵 ${esc(o.bairro || 'Entrega')}</span>` : `<span class="tag">🏠 Retirada</span>`);
+    if (needsHelp(o)) t.push(`<span class="tag help">🙋 Pediu ajuda</span>`);
+    else if (o.chat?.human_status === 'handling') t.push(`<span class="tag" style="background:var(--s2b);color:var(--s2)">💬 Equipe atendendo</span>`);
+    t.push(o.delivery_mode === 'entrega' ? `<span class="tag deliv">🛵 ${esc(o.bairro || 'Entrega')}${o.delivery_fee_cents == null ? ' · taxa a combinar' : ''}</span>` : `<span class="tag">🏠 Retirada</span>`);
+    if (isStale(o)) t.push(`<span class="tag warn">⏰ Sem comprovante há ${ago(o.created_at).replace('há ', '')}</span>`);
     if (o.has_receipt) t.push(`<span class="tag ok">🧾 Comprovante</span>`);
     else if (o.status === 'pedido_feito') t.push(o.source === 'site' && !o.wa_jid ? `<span class="tag bad">Aguardando WhatsApp</span>` : `<span class="tag warn">Sem comprovante</span>`);
     if (o.source === 'whatsapp') t.push(`<span class="tag">💬 Bot</span>`);
@@ -125,7 +150,7 @@
   }
   function cardHtml(o, fresh) {
     const nx = FLOW[FLOW.indexOf(o.status) + 1];
-    return `<article class="ocard ${fresh ? 'fresh' : ''}" data-id="${o.id}">
+    return `<article class="ocard ${fresh ? 'fresh' : ''} ${needsHelp(o) ? 'needs-help' : ''}" data-id="${o.id}">
       <div class="oc-top"><span class="oc-num">#${o.number_label}</span><span class="oc-time" title="${dt(o.created_at)}">${ago(o.created_at)}</span></div>
       <div class="oc-name">${esc(o.customer_name)}</div>
       <p class="oc-items">${esc(itemsTxt(o))}</p>
@@ -195,7 +220,7 @@
           <dt>Nome</dt><dd>${esc(o.customer_name)}</dd>
           <dt>Telefone</dt><dd><a href="https://wa.me/${esc(o.phone)}?text=${encodeURIComponent(waMsg)}" target="_blank" rel="noopener">${esc(phoneFmt(o.phone))} ↗</a></dd>
           <dt>Recebimento</dt><dd>${ent ? `🛵 Entrega · ${esc(o.bairro)}` : '🏠 Retirada no local'}</dd>
-          ${ent ? `<dt>Endereço</dt><dd>${esc(o.address)}${o.address_ref ? `<br><span class="muted">${esc(o.address_ref)}</span>` : ''}</dd>` : ''}
+          ${ent ? `<dt>Distância</dt><dd>${o.delivery_km ? '≈ ' + String(o.delivery_km).replace('.', ',') + ' km' : '<span style="color:var(--s6)">não calculada</span>'}</dd><dt>Endereço</dt><dd>${esc(o.address)}${o.address_ref ? `<br><span class="muted">${esc(o.address_ref)}</span>` : ''}</dd>` : ''}
           <dt>Origem</dt><dd>${o.source === 'whatsapp' ? 'Bot do WhatsApp' : o.source === 'admin' ? 'Manual (painel)' : 'Site'}${o.source === 'site' ? (o.wa_jid ? ' · confirmou no WhatsApp' : ' · <span style="color:var(--s6)">ainda não confirmou no WhatsApp</span>') : ''}</dd>
           <dt>Feito em</dt><dd>${dt(o.created_at)}</dd>
         </dl></div>
@@ -210,11 +235,13 @@
           : `<div class="noreceipt">Nenhum comprovante ainda.<br><small>${o.source === 'site' && !o.wa_jid ? 'O cliente ainda não concluiu o pedido no WhatsApp.' : 'O cliente envia pelo WhatsApp.'}</small></div>`}</div>
         <div class="sec"><h3>Histórico</h3><ul class="tl">${ev.map((e) => `<li style="--c:${COLOR[e.status] || '#ccc'}"><span>${esc(sInfo(e.status).label)}</span><time>${dt(e.created_at)}</time></li>`).join('')}</ul></div>
       </div>
+      ${o.wa_jid ? `<div style="padding:0 20px 10px"><button class="btn block" id="drChat">💬 Ver conversa no WhatsApp</button></div>` : ''}
       <div class="dr-f">
         ${o.status === 'cancelado' ? `<button class="btn" data-st="pedido_feito">Reabrir pedido</button>`
           : `<button class="btn danger" data-st="cancelado">Cancelar</button>${FLOW[idx + 1] ? `<button class="btn ${o.status === 'pedido_feito' ? 'green' : 'primary'}" data-st="${FLOW[idx + 1]}">${NEXT_LABEL[o.status]} →</button>` : `<button class="btn" disabled>Pedido concluído ✓</button>`}`}
       </div>`;
     $('#drX').onclick = closeDrawer;
+    const dc = $('#drChat'); if (dc) dc.onclick = () => { closeDrawer(); openJid = o.wa_jid; $('[data-tab=chats]').click(); };
     $('#drawer').onclick = (e) => { const b = e.target.closest('[data-st]'); if (b && b.dataset.st !== o.status) setStatus(o.id, b.dataset.st); };
     $('#scrim').hidden = false; requestAnimationFrame(() => { $('#scrim').classList.add('on'); $('#drawer').classList.add('on'); });
   }
@@ -327,7 +354,6 @@
       <div class="card"><h3>Vendas</h3><p>Controle da pré-venda e do atendimento.</p>
         ${sw('accepting_orders', 'Pré-venda aberta', 'Quando desligado, o cardápio fica só para consulta.')}
         ${sw('delivery_enabled', 'Oferecer entrega', 'Mostra a opção "Receber em casa" com taxa por bairro.')}
-        ${sw('notify_status_whatsapp', 'Avisar cliente no WhatsApp', 'Envia mensagem automática quando o status do pedido muda.')}
         <div style="margin-top:12px">${f('next_order_number', 'Próximo número de pedido', 'type="number" min="1" max="999"')}</div>
       </div>
       <div class="card"><h3>Pix</h3><p>Dados usados para gerar o QR Code e o copia e cola.</p>
@@ -336,7 +362,10 @@
       </div>
       <div class="card"><h3>Retirada e entrega</h3><p>Aparece no topo do cardápio e no fechamento do pedido.</p>
         <div class="row2">${f('pickup_address', 'Endereço de retirada')}${f('pickup_city', 'Cidade (para o mapa)')}</div>
-        ${f('delivery_note', 'Texto da entrega')}
+        <div class="row2">${f('delivery_per_km', 'Valor por km (R$)', 'inputmode="decimal"')}${f('delivery_round', 'Arredondar para cima de (R$)', 'inputmode="decimal"', 'Ex.: 0,50 → 4,2 km vira R$ 4,50.')}</div>
+        <div class="row2">${f('delivery_min', 'Taxa mínima (R$)', 'inputmode="decimal"', '0 = sem mínimo.')}${f('delivery_max_km', 'Distância máxima (km)', 'inputmode="decimal"', 'Acima disso, taxa "a combinar".')}</div>
+        <div class="row2">${f('pickup_lat', 'Latitude da retirada', '', 'Preenchida automaticamente. Pode corrigir se o mapa errar.')}${f('pickup_lng', 'Longitude da retirada')}</div>
+        ${f('delivery_note', 'Texto da entrega no cardápio')}
         ${f('location_note', 'Aviso de local', '', 'Usado só se não houver endereço de retirada.')}
       </div>
       <div class="card"><h3>Página</h3><p>Identidade da equipe no cardápio.</p>
@@ -357,6 +386,62 @@
   };
 
   /* ---------- whatsapp ---------- */
+  /* ---------- conversas ---------- */
+  const initials = (c) => String(c.name || c.phone || '?').trim().charAt(0).toUpperCase();
+  const dayLabel = (iso) => { const d = new Date(iso), t = new Date(); const y = new Date(Date.now() - 864e5); const same = (a, b) => a.toDateString() === b.toDateString(); return same(d, t) ? 'Hoje' : same(d, y) ? 'Ontem' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' }); };
+  let chatsCache = [];
+  async function loadChats() { await refreshChats(true); }
+  async function refreshChats(first) {
+    let j; try { j = await api('/api/admin/chats'); } catch { return; }
+    chatsCache = j.chats; helpCount = chatsCache.filter((c) => c.human_status === 'requested').length; unreadCount = chatsCache.reduce((a, c) => a + (c.unread || 0), 0); paintChatBadge();
+    renderChatList();
+    if (first && openJid) openChat(openJid); else if (openJid) loadThread(openJid, true);
+  }
+  function renderChatList() {
+    $('#chatList').innerHTML = chatsCache.length ? chatsCache.map((c) => `<div class="citem ${c.jid === openJid ? 'on' : ''}" data-jid="${esc(c.jid)}">
+      <div class="cav">${esc(initials(c))}</div>
+      <div class="cinfo"><b>${esc(c.name || phoneFmt(c.phone || c.jid.split('@')[0]))}</b><span>${c.human_status === 'requested' ? '🙋 ' : ''}${esc(c.last_text || '')}</span></div>
+      <div class="cmeta"><span>${c.last_at ? hhmm(c.last_at) : ''}</span>${c.human_status === 'requested' ? '<span class="hbadge">AJUDA</span>' : c.human_status === 'handling' ? '<span class="hbadge h">EQUIPE</span>' : ''}${c.unread ? `<span class="ubadge">${c.unread}</span>` : ''}</div></div>`).join('')
+      : `<div class="empty-state"><b>Nenhuma conversa ainda</b>As conversas do WhatsApp aparecem aqui.</div>`;
+  }
+  $('#chatList').onclick = (e) => { const c = e.target.closest('[data-jid]'); if (c) openChat(c.dataset.jid); };
+  async function openChat(jid) { openJid = jid; $('.chats').classList.add('open'); renderChatList(); await loadThread(jid, false); }
+  async function loadThread(jid, keepScroll) {
+    let j; try { j = await api('/api/admin/chats/' + encodeURIComponent(jid)); } catch (e) { return; }
+    const c = j.chat, th = $('.thread'); const atBottom = !th || th.scrollHeight - th.scrollTop - th.clientHeight < 80;
+    let lastDay = '', body = '';
+    for (const m of j.messages) {
+      const dl = dayLabel(m.created_at); if (dl !== lastDay) { body += `<div class="day">${dl}</div>`; lastDay = dl; }
+      const who = m.direction === 'in' ? '' : m.direction === 'human' ? '<span class="who">Equipe (celular)</span>' : '<span class="who">Bot</span>';
+      let media = '';
+      const mu = `/api/admin/media/${m.id}`;
+      if (m.media_path && m.kind === 'image') media = `<img class="m" src="${mu}" data-zoom="${mu}" alt="Foto" loading="lazy">`;
+      else if (m.media_path && m.kind === 'audio') media = `<audio controls preload="none" src="${mu}"></audio>`;
+      else if (m.media_path && m.kind === 'video') media = `<video controls preload="none" style="max-width:100%;border-radius:8px" src="${mu}"></video>`;
+      else if (m.media_path && m.kind === 'document') media = `<a class="file" href="${mu}" target="_blank">📄 Abrir documento</a>`;
+      else if (m.kind === 'image' && m.direction !== 'in') media = `<span class="ph">🖼️ QR Code Pix enviado</span><br>`;
+      else if (m.kind !== 'text') media = `<span class="ph">${{ image: '📷 Foto não baixada', audio: '🎤 Áudio', video: '🎥 Vídeo', document: '📄 Documento', sticker: 'Figurinha' }[m.kind] || ''}</span><br>`;
+      body += `<div class="bub ${m.direction}">${who}${media}${esc(m.body || '')}<span class="tm">${hhmm(m.created_at)}</span></div>`;
+    }
+    const st = c.human_status;
+    $('#chatView').innerHTML = `
+      <div class="cv-h"><div class="cav">${esc(initials(c))}</div><div><div class="nm">${esc(c.name || phoneFmt(c.phone || c.jid.split('@')[0]))}</div><div class="sub">${esc(phoneFmt(c.phone || c.jid.split('@')[0]))}</div></div><span class="sp"></span>
+        <button class="btn sm back" id="cvBack" style="display:none">‹ Voltar</button>
+        ${c.phone ? `<a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${esc(c.phone)}">Abrir no WhatsApp ↗</a>` : ''}
+        ${st === 'none' ? `<button class="btn sm" data-h="handling">Vou atender (pausar bot)</button>` : `<button class="btn sm green" data-h="none">Resolvido — retomar bot</button>`}</div>
+      ${st === 'requested' ? `<div class="cv-alert">🙋 O cliente pediu ajuda: ${esc(c.human_reason || '')}</div>` : st === 'handling' ? `<div class="cv-alert h">💬 Bot pausado nesta conversa — a equipe está atendendo. Volta sozinho após 8h sem atividade.</div>` : ''}
+      ${j.orders.length ? `<div class="cv-orders">${j.orders.map((o) => `<button class="btn sm" data-ord="${o.id}">#${String(o.number).padStart(3, '0')} · ${esc(sInfo(o.status).label)} · ${brl(o.total_cents)}</button>`).join('')}</div>` : ''}
+      <div class="thread">${body || '<div class="empty-state">Sem mensagens.</div>'}</div>
+      <div class="cv-foot">Somente leitura: para responder, use o WhatsApp no celular. Suas mensagens aparecem aqui e o bot fica em silêncio enquanto você atende.</div>`;
+    const t2 = $('.thread'); if (t2 && (!keepScroll || atBottom)) t2.scrollTop = t2.scrollHeight;
+    const bk = $('#cvBack'); if (bk) { bk.style.display = innerWidth < 860 ? '' : 'none'; bk.onclick = () => { $('.chats').classList.remove('open'); openJid = null; renderChatList(); }; }
+    $('#chatView').onclick = async (e) => {
+      const z = e.target.closest('[data-zoom]'); if (z) { const lb = document.createElement('div'); lb.className = 'lightbox'; lb.innerHTML = `<img src="${z.dataset.zoom}">`; lb.onclick = () => lb.remove(); return document.body.appendChild(lb); }
+      const h = e.target.closest('[data-h]'); if (h) { await api(`/api/admin/chats/${encodeURIComponent(jid)}/human`, json('POST', { status: h.dataset.h })); toast(h.dataset.h === 'none' ? 'Bot retomado nesta conversa' : 'Bot pausado nesta conversa'); refreshChats(); return loadThread(jid); }
+      const o = e.target.closest('[data-ord]'); if (o) { $('[data-tab=orders]').click(); setTimeout(() => openOrder(+o.dataset.ord), 300); }
+    };
+  }
+
   const WA_LABEL = { open: 'Conectado', connecting: 'Aguardando leitura do QR Code', close: 'Desconectado', not_created: 'Instância não encontrada', unknown: 'Desconhecido' };
   async function refreshWaDot() {
     try { const w = await api('/api/admin/whatsapp'); const d = $('#waDot'); d.className = 'dot ' + (w.state === 'open' ? 'open' : w.configured ? 'bad' : ''); } catch {}

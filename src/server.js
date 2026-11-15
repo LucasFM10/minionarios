@@ -5,8 +5,7 @@ const express = require('express');
 const multer = require('multer');
 const store = require('./db');
 const wa = require('./whatsapp');
-const { buildPixPayload, pixQrDataUrl } = require('./pix');
-const { BAIRROS } = require('./bairros');
+const geo = require('./geo');
 const imgUrl = (i) => (!i ? null : i.startsWith('/') ? i : '/uploads/' + i);
 
 const PORT = process.env.PORT || 3000;
@@ -106,6 +105,7 @@ const publicOrder = (o, events) => ({
   address: o.address,
   address_ref: o.address_ref,
   delivery_fee_cents: o.delivery_fee_cents,
+  delivery_km: o.delivery_km,
   status: o.status,
   status_info: o.status_info,
   has_receipt: o.has_receipt,
@@ -123,20 +123,18 @@ app.get('/api/menu', (req, res) => {
     .prepare('SELECT id, name, description, price_cents, category, emoji, image, featured, badge FROM products WHERE active = 1 ORDER BY sort, id')
     .all()
     .map((p) => ({ ...p, image: imgUrl(p.image) }));
-  res.json({ settings: publicSettings(store.getSettings()), products, statuses: store.STATUSES, bairros: BAIRROS });
+  res.json({ settings: publicSettings(store.getSettings()), products, statuses: store.STATUSES });
 });
 
-app.post('/api/pix', rateLimit(60, 60000), async (req, res) => {
+// Estimativa da taxa de entrega (a mesma conta é refeita no servidor ao criar o pedido).
+app.post('/api/delivery/quote', rateLimit(40, 10 * 60000), async (req, res) => {
   try {
-    const { total: subtotal } = store.priceItems(req.body.items);
-    const d = store.resolveDelivery(req.body.delivery, req.body.items);
-    const fee = d.mode === 'entrega' ? d.fee_cents : 0;
-    const total = subtotal + (fee || 0);
     const s = store.getSettings();
-    const payload = buildPixPayload({ key: s.pix_key, name: s.pix_name, city: s.pix_city, amountCents: total });
-    res.json({ subtotal_cents: subtotal, delivery: d, fee_cents: fee, total_cents: total, payload, qr: await pixQrDataUrl(payload) });
+    if (s.delivery_enabled !== '1') return res.status(400).json({ error: 'Entrega indisponível.' });
+    const d = await geo.priceDelivery({ address: req.body.address, bairro: req.body.bairro, cep: req.body.cep });
+    res.json({ km: d.km, fee_cents: d.fee_cents, approx: d.approx });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.json({ km: null, fee_cents: null, approx: false });
   }
 });
 
@@ -150,12 +148,18 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
     } catch {
       return res.status(400).json({ error: 'Itens inválidos.' });
     }
+    let delivery = null;
+    try { delivery = JSON.parse(req.body.delivery || 'null'); } catch {}
+    if (delivery && delivery.mode === 'entrega') {
+      store.resolveDelivery({ ...delivery, fee_cents: 0 }, items); // valida antes de gastar uma consulta de mapa
+      delivery = await geo.priceDelivery(delivery); // a taxa é sempre calculada aqui, nunca vinda do cliente
+    }
     let order = store.createOrder({
       customer_name: req.body.name || '',
       phone: req.body.phone || '',
       notes: req.body.notes || '',
       items,
-      delivery: (() => { try { return JSON.parse(req.body.delivery || 'null'); } catch { return null; } })(),
+      delivery,
       source: 'site',
     });
     if (req.file) {
@@ -217,7 +221,9 @@ app.post('/api/admin/logout', (req, res) => {
 app.get('/api/admin/me', requireAdmin, (req, res) => res.json({ ok: true }));
 
 app.get('/api/admin/orders', requireAdmin, (req, res) => {
-  res.json({ orders: store.listOrders({ status: req.query.status, q: req.query.q }), stats: store.stats(), statuses: store.ALL_STATUSES });
+  const chats = store.chatStates();
+  const orders = store.listOrders({ status: req.query.status, q: req.query.q }).map((o) => ({ ...o, chat: o.wa_jid ? chats[o.wa_jid] || null : null }));
+  res.json({ orders, stats: store.stats(), statuses: store.ALL_STATUSES, help: Object.values(chats).filter((c) => c.human_status === 'requested').length, unread: Object.values(chats).reduce((a, c) => a + (c.unread || 0), 0) });
 });
 
 app.get('/api/admin/orders/:id', requireAdmin, (req, res) => {
@@ -236,7 +242,6 @@ app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
       store.db.prepare('UPDATE orders SET notes = ? WHERE id = ?').run(req.body.notes.slice(0, 300), o.id);
       o = store.getOrderById(o.id);
     }
-    if (req.body.status && before.status !== o.status) wa.notifyStatus(o);
     res.json({ order: o });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -286,6 +291,30 @@ app.get('/api/admin/export.csv', requireAdmin, (req, res) => {
   const csv = '﻿' + rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
   res.setHeader('Content-Disposition', 'attachment; filename="pedidos-minionarios.csv"');
   res.type('text/csv').send(csv);
+});
+
+// Conversas do WhatsApp (somente leitura)
+app.get('/api/admin/chats', requireAdmin, (req, res) => res.json({ chats: store.listChats() }));
+app.get('/api/admin/chats/:jid', requireAdmin, (req, res) => {
+  const chat = store.getChat(req.params.jid);
+  if (!chat) return res.status(404).json({ error: 'Conversa não encontrada' });
+  store.markChatRead(req.params.jid);
+  const orders = store.db.prepare('SELECT id, number, status, total_cents FROM orders WHERE wa_jid = ? ORDER BY id DESC').all(req.params.jid);
+  res.json({ chat: { ...chat, unread: 0 }, messages: store.chatMessages(req.params.jid), orders });
+});
+app.post('/api/admin/chats/:jid/human', requireAdmin, (req, res) => {
+  const st = req.body.status;
+  if (!['none', 'handling'].includes(st)) return res.status(400).json({ error: 'Status inválido' });
+  store.setHuman(req.params.jid, st, st === 'handling' ? 'Equipe atendendo (painel)' : null);
+  res.json({ ok: true });
+});
+app.get('/api/admin/media/:id', requireAdmin, (req, res) => {
+  const m = store.db.prepare('SELECT media_path, media_mime FROM wa_messages WHERE id = ?').get(req.params.id);
+  if (!m || !m.media_path) return res.status(404).end();
+  const base = path.join(UPLOADS, 'chat');
+  const file = path.join(UPLOADS, m.media_path);
+  if (!file.startsWith(base)) return res.status(400).end();
+  res.type(m.media_mime || 'application/octet-stream').sendFile(file);
 });
 
 // Products
@@ -344,7 +373,7 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
 // Settings
 const EDITABLE = [
   'team_name', 'tagline', 'subtitle', 'event_date_label', 'pickup_label', 'location_note', 'instagram',
-  'whatsapp_number', 'pix_key', 'pix_name', 'pix_city', 'accepting_orders', 'notify_status_whatsapp',
+  'whatsapp_number', 'pix_key', 'pix_name', 'pix_city', 'accepting_orders', 'delivery_per_km', 'delivery_round', 'delivery_min', 'delivery_max_km', 'pickup_lat', 'pickup_lng',
   'require_receipt', 'next_order_number', 'pickup_address', 'pickup_city', 'delivery_enabled', 'delivery_note',
 ];
 app.get('/api/admin/settings', requireAdmin, (req, res) => {

@@ -11,13 +11,12 @@
   const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
   const fmtKey = (k) => { const d = String(k).replace(/\D/g, ''); return /^\+?55\d{10,11}$/.test(String(k).replace(/[^\d+]/g, '')) && d.length >= 12 ? `(${d.slice(2, 4)}) ${d.slice(4, -4)}-${d.slice(-4)}` : k; };
 
-  let S = {}, PRODUCTS = [], BAIRROS = [], CATS = [];
+  let S = {}, PRODUCTS = [], CATS = [];
   const byId = (id) => PRODUCTS.find((p) => p.id === +id);
   let bag = store.get('mn_bag2', {});
   let cliente = Object.assign({ nome: '', tel: '', obs: '', modo: '', bairro: '', rua: '', ref: '' }, store.get('mn_cliente2', {}));
   let pedido = null, sending = false, waSent = true, closeWarned = false;
   const hasBurger = () => Object.keys(bag).some((k) => byId(k) && BURGER_CATS.includes(norm(byId(k).category)));
-  const findBairro = (n) => BAIRROS.find((b) => b.n === n);
 
   const bagCount = () => Object.values(bag).reduce((a, b) => a + b, 0);
   const bagTotal = () => Object.entries(bag).reduce((a, [k, q]) => a + byId(k).price_cents * q, 0);
@@ -28,7 +27,7 @@
   /* ===== loja ===== */
   async function load() {
     const r = await fetch('/api/menu').then((r) => r.json());
-    S = r.settings; PRODUCTS = r.products; BAIRROS = r.bairros || [];
+    S = r.settings; PRODUCTS = r.products;
     for (const k in bag) if (!byId(k) || !(bag[k] > 0)) delete bag[k];
     renderStore(); renderMenu(); renderBagBar(); renderMyOrders();
   }
@@ -149,7 +148,6 @@
     const podeEntregar = S.delivery_enabled && hasBurger();
     if (!podeEntregar && cliente.modo === 'entrega') cliente.modo = '';
     if (!S.delivery_enabled) cliente.modo = 'retirada';
-    const opts = BAIRROS.map((b) => `<option value="${esc(b.n)}" ${cliente.bairro === b.n ? 'selected' : ''}>${esc(b.n)}</option>`).join('');
     const pickupTxt = S.pickup_address ? `Sem taxa. ${esc(S.pickup_address)}${S.pickup_city ? ', ' + esc(S.pickup_city.replace(/\s*-\s*PB$/, '')) : ''}.` : `Sem taxa. ${esc(S.location_note)}`;
     $('#shBody').innerHTML = `<form id="f" novalidate>
       <div class="field"><label for="nome">Nome completo</label><input id="nome" autocomplete="name" value="${esc(cliente.nome)}" placeholder="Seu nome"><span class="err" id="eNome" hidden>Digite seu nome.</span></div>
@@ -157,12 +155,12 @@
       <div class="field"${S.delivery_enabled ? '' : ' hidden'}><span class="legend" id="lgModo">Como você quer receber?</span>
         <div class="opts" role="radiogroup" aria-labelledby="lgModo">
           <label class="opt"><input type="radio" name="modo" value="retirada" ${cliente.modo === 'retirada' ? 'checked' : ''}><div><b>Retirar no local</b><span>${pickupTxt}</span></div></label>
-          <label class="opt${podeEntregar ? '' : ' off'}"><input type="radio" name="modo" value="entrega" ${cliente.modo === 'entrega' ? 'checked' : ''} ${podeEntregar ? '' : 'disabled'}><div><b>Receber em casa</b><span>${podeEntregar ? 'Entrega em João Pessoa na noite do evento. A taxa depende do bairro.' : 'A entrega vale só para pedidos com pelo menos um hambúrguer ou combo.'}</span></div></label>
+          <label class="opt${podeEntregar ? '' : ' off'}"><input type="radio" name="modo" value="entrega" ${cliente.modo === 'entrega' ? 'checked' : ''} ${podeEntregar ? '' : 'disabled'}><div><b>Receber em casa</b><span>${podeEntregar ? 'Entrega em João Pessoa na noite do evento. A taxa é calculada pela distância.' : 'A entrega vale só para pedidos com pelo menos um hambúrguer ou combo.'}</span></div></label>
         </div><span class="err" id="eModo" hidden>Escolha retirar no local ou receber em casa.</span></div>
       <div id="addr" hidden>
-        <div class="field"><label for="bairro">Bairro</label><select id="bairro"><option value="">Selecione seu bairro</option>${opts}</select><span class="err" id="eBairro" hidden>Selecione o seu bairro.</span><div id="taxaBox" hidden></div></div>
         <div class="field"><label for="cep">CEP <span style="font-weight:400;color:var(--muted)">(opcional — preenche a rua)</span></label><input id="cep" inputmode="numeric" autocomplete="postal-code" value="${esc(cliente.cep || '')}" placeholder="00000-000"><span class="err" id="eCep" hidden></span></div>
         <div class="field"><label for="rua">Rua e número</label><input id="rua" autocomplete="street-address" value="${esc(cliente.rua)}" placeholder="Ex.: Rua Golfo de Lion, 120"><span class="err" id="eRua" hidden>Digite a rua e o número.</span></div>
+        <div class="field"><label for="bairro">Bairro</label><input id="bairro" value="${esc(cliente.bairro)}" placeholder="Ex.: Manaíra"><span class="err" id="eBairro" hidden>Digite o seu bairro.</span><div id="taxaBox" hidden></div></div>
         <div class="field"><label for="ref">Complemento e ponto de referência</label><input id="ref" value="${esc(cliente.ref)}" placeholder="Ex.: apto 302, perto da padaria"></div>
       </div>
       <div class="field"><span class="legend">Pagamento</span>
@@ -174,16 +172,37 @@
     </form>`;
     const tel = $('#tel'); tel.oninput = () => { tel.value = maskTel(tel.value); }; if (tel.value) tel.value = maskTel(tel.value);
     const modo = () => (document.querySelector('input[name=modo]:checked') || {}).value || (S.delivery_enabled ? '' : 'retirada');
-    const taxaAtual = () => { if (modo() !== 'entrega') return 0; const b = findBairro($('#bairro').value); return b ? b.fee : undefined; };
-    const refresh = () => {
+    let quote = null, qTimer = null, qSeq = 0;
+    const taxaAtual = () => (modo() !== 'entrega' ? 0 : quote && quote.fee_cents != null ? quote.fee_cents : undefined);
+    const paint = () => {
       const m = modo(); $('#addr').hidden = m !== 'entrega';
-      const b = findBairro($('#bairro').value), box = $('#taxaBox');
-      if (m === 'entrega' && b) { box.hidden = false; box.className = b.fee ? 'taxa' : 'taxa far'; box.innerHTML = b.fee ? `<span>Taxa de entrega para ${esc(b.n)}</span><b class="price">${brl(b.fee)}</b>` : `<b>${esc(b.n)} fica a mais de 5 km.</b> Você paga o pedido pelo Pix agora, e a taxa de entrega é combinada com a equipe no WhatsApp.`; } else box.hidden = true;
+      const box = $('#taxaBox');
+      if (m === 'entrega' && quote) {
+        box.hidden = false;
+        if (quote.loading) { box.className = 'taxa'; box.innerHTML = '<span>Calculando a taxa de entrega…</span>'; }
+        else if (quote.fee_cents != null) { box.className = 'taxa'; box.innerHTML = `<span>Taxa de entrega${quote.km ? ` · ≈ ${String(quote.km).replace('.', ',')} km` : ''}</span><b class="price">${brl(quote.fee_cents)}</b>`; }
+        else { box.className = 'taxa far'; box.innerHTML = '<b>Não conseguimos calcular a distância automaticamente.</b> Sem problema: você paga o pedido pelo Pix agora, e a taxa de entrega é combinada com a equipe no WhatsApp.'; }
+      } else box.hidden = true;
       const t = taxaAtual();
       $('#nextT').textContent = brl(bagTotal() + (typeof t === 'number' ? t : 0));
     };
+    const requote = () => {
+      clearTimeout(qTimer);
+      if (modo() !== 'entrega') { quote = null; return paint(); }
+      const rua = $('#rua').value.trim(), bairro = $('#bairro').value.trim(), cepV = $('#cep').value.replace(/\D/g, '');
+      if (rua.length < 4 || (!bairro && cepV.length !== 8)) { quote = null; return paint(); }
+      quote = { loading: true }; paint();
+      const my = ++qSeq;
+      qTimer = setTimeout(async () => {
+        try {
+          const r = await fetch('/api/delivery/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: rua, bairro, cep: cepV }) }).then((r) => r.json());
+          if (my === qSeq) { quote = { fee_cents: r.fee_cents ?? null, km: r.km }; paint(); }
+        } catch { if (my === qSeq) { quote = { fee_cents: null }; paint(); } }
+      }, 700);
+    };
+    const refresh = () => { paint(); requote(); };
     $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="next"><span>Fechar pedido</span><span class="price" id="nextT">${brl(bagTotal())}</span></button>`;
-    $('#f').addEventListener('change', refresh); refresh();
+    $('#f').addEventListener('change', refresh); $('#f').addEventListener('input', (e) => { if (['rua', 'bairro'].includes(e.target.id)) requote(); }); refresh();
     const cep = $('#cep');
     cep.oninput = async () => {
       let d = cep.value.replace(/\D/g, '').slice(0, 8);
@@ -194,23 +213,22 @@
         const r = await fetch(`https://viacep.com.br/ws/${d}/json/`).then((r) => r.json());
         if (r.erro) throw new Error('CEP não encontrado. Digite a rua manualmente.');
         if (r.logradouro) { $('#rua').value = `${r.logradouro}, `; $('#rua').focus(); }
-        const b = BAIRROS.find((x) => norm(x.n) === norm(r.bairro));
-        if (b) { $('#bairro').value = b.n; refresh(); }
-        else if (r.bairro) { const e = $('#eCep'); e.hidden = false; e.style.color = 'var(--muted)'; e.textContent = `Bairro pelo CEP: ${r.bairro}. Selecione na lista acima.`; }
+        if (r.bairro) $('#bairro').value = r.bairro;
+        requote();
       } catch (e) { const el = $('#eCep'); el.hidden = false; el.style.color = ''; el.textContent = e.message.includes('CEP') ? e.message : 'Não foi possível consultar o CEP. Digite a rua manualmente.'; }
     };
     $('#next').onclick = async () => {
       const nome = $('#nome').value.trim(), t = $('#tel').value, d = t.replace(/\D/g, ''), m = modo(), obs = $('#obs').value.trim();
       const bairro = $('#bairro').value, rua = $('#rua').value.trim(), ref = $('#ref').value.trim();
       $('#eNome').hidden = nome.length >= 2; $('#eTel').hidden = d.length >= 10; $('#eModo').hidden = !!m;
-      const ent = m === 'entrega'; $('#eBairro').hidden = !ent || !!bairro; $('#eRua').hidden = !ent || rua.length >= 4;
+      const ent = m === 'entrega'; $('#eBairro').hidden = true; $('#eRua').hidden = !ent || rua.length >= 4;
       if (nome.length < 2) { $('#nome').focus(); return; } if (d.length < 10) { $('#tel').focus(); return; }
       if (!m) { $('#eModo').scrollIntoView({ block: 'center' }); return; }
-      if (ent && !bairro) { $('#bairro').focus(); return; } if (ent && rua.length < 4) { $('#rua').focus(); return; }
+      if (ent && rua.length < 4) { $('#rua').focus(); return; }
       const cepV = ent ? $('#cep').value.trim() : '';
       cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '', cep: cepV }; store.set('mn_cliente2', cliente);
       const items = Object.entries(bag).map(([k, q]) => ({ product_id: +k, qty: q }));
-      const delivery = ent ? { mode: 'entrega', bairro, address: cepV ? `${rua} — CEP ${cepV}` : rua, ref } : { mode: 'retirada' };
+      const delivery = ent ? { mode: 'entrega', bairro, address: rua, cep: cepV.replace(/\D/g, ''), ref } : { mode: 'retirada' };
       pedido = { items, delivery };
       createOrder();
     };
@@ -244,7 +262,7 @@
     const url = `https://wa.me/${S.whatsapp_number}?text=${encodeURIComponent(waText(o))}`;
     $('#shBody').innerHTML = `<div class="alert" id="waAlert" style="margin-top:4px"><b class="h">Falta concluir no WhatsApp!</b>Seu pedido foi gerado, mas só é <b>confirmado no WhatsApp</b>. Toque no botão verde e envie a mensagem que já vai pronta.</div>
       <p class="center" style="margin:16px 0 0;color:var(--muted)">Número do pedido</p><p class="center code big" style="margin:0">#${esc(o.number)}</p>
-      <dl class="lines"><dt>Itens</dt><dd>${brl(o.subtotal_cents)}</dd>${ent ? `<dt>Entrega · ${esc(o.bairro)}</dt><dd>${o.delivery_fee_cents === null ? 'a combinar' : brl(o.delivery_fee_cents)}</dd>` : `<dt>Retirada no local</dt><dd>grátis</dd>`}<dt class="tot">Total no Pix</dt><dd class="tot">${brl(o.total_cents)}</dd></dl>
+      <dl class="lines"><dt>Itens</dt><dd>${brl(o.subtotal_cents)}</dd>${ent ? `<dt>Entrega${o.bairro ? ' · ' + esc(o.bairro) : ''}${o.delivery_km ? ' · ≈ ' + String(o.delivery_km).replace('.', ',') + ' km' : ''}</dt><dd>${o.delivery_fee_cents === null ? 'a combinar' : brl(o.delivery_fee_cents)}</dd>` : `<dt>Retirada no local</dt><dd>grátis</dd>`}<dt class="tot">Total no Pix</dt><dd class="tot">${brl(o.total_cents)}</dd></dl>
       <ol class="steps"><li>Toque em <b>Concluir pedido no WhatsApp</b> e envie a mensagem com o número do pedido.</li><li>Você recebe na conversa o <b>QR Code e o Pix copia e cola</b> com o valor.</li><li>Pague e <b>anexe o comprovante do Pix</b> na mesma conversa. Pronto!</li></ol>
       <p class="cause" style="text-align:center">Acompanhe o status pelo WhatsApp ou pelo link <a href="/pedido?c=${encodeURIComponent(o.code)}">Acompanhar pedido</a>.</p>`;
     $('#shFoot').innerHTML = `<a class="cta wa" id="wa" href="${url}" target="_blank" rel="noopener">${WA_ICON}<span>Concluir pedido no WhatsApp</span></a>
