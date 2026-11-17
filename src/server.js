@@ -491,10 +491,32 @@ app.post('/api/admin/whatsapp/logout', requireAdmin, requireManage, async (req, 
 // ---------- static ----------
 app.use('/uploads/products', express.static(path.join(UPLOADS, 'products'), { maxAge: '7d' }));
 app.use('/uploads/brand', express.static(path.join(UPLOADS, 'brand'), { maxAge: '7d' }));
-app.use(express.static(PUBLIC, { extensions: ['html'], maxAge: '5m' }));
-app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC, 'admin.html')));
-app.get('/pedido', (req, res) => res.sendFile(path.join(PUBLIC, 'pedido.html')));
-app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, 'index.html')));
+// Páginas: nunca em cache, e os JS/CSS locais ganham ?v=<versão do deploy>, então o navegador
+// (Safari inclusive) sempre pega a versão nova logo após um deploy.
+const BUILD = Date.now().toString(36);
+const pageCache = new Map();
+function sendPage(res, file, status = 200) {
+  if (!pageCache.has(file)) {
+    const html = fs.readFileSync(path.join(PUBLIC, file), 'utf8').replace(/(src|href)="(\/[\w./-]+\.(?:js|css))"/g, `$1="$2?v=${BUILD}"`);
+    pageCache.set(file, html);
+  }
+  res.status(status).set('Cache-Control', 'no-cache, no-store, must-revalidate').type('html').send(pageCache.get(file));
+}
+app.get(['/', '/index.html'], (req, res) => sendPage(res, 'index.html'));
+app.get(['/admin', '/admin.html'], (req, res) => sendPage(res, 'admin.html'));
+app.get(['/pedido', '/pedido.html'], (req, res) => sendPage(res, 'pedido.html'));
+app.use((req, res, next) => {
+  // JS/CSS com ?v= são imutáveis; sem versão, o navegador sempre confere se mudou.
+  if (/\.(js|css)$/.test(req.path)) res.locals.cc = req.query.v ? 'public, max-age=31536000, immutable' : 'no-cache';
+  next();
+});
+app.use(
+  express.static(PUBLIC, {
+    index: false,
+    setHeaders: (res) => res.setHeader('Cache-Control', res.locals.cc || 'public, max-age=300'),
+  })
+);
+app.use((req, res) => sendPage(res, 'index.html', 404));
 
 app.use((err, req, res, next) => {
   console.error(err);
