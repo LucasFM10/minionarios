@@ -141,6 +141,12 @@ app.post('/api/delivery/quote', rateLimit(40, 10 * 60000), async (req, res) => {
   }
 });
 
+// Busca de rua (para quem não sabe o CEP) — proxy do ViaCEP restrito a João Pessoa.
+app.get('/api/address/search', rateLimit(60, 10 * 60000), async (req, res) => {
+  try { res.json({ results: await geo.viaCepSearch(req.query.q) }); }
+  catch { res.status(502).json({ error: 'Não foi possível buscar agora. Tente de novo em instantes.' }); }
+});
+
 app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), async (req, res) => {
   try {
     const s = store.getSettings();
@@ -154,6 +160,7 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
     let delivery = null;
     try { delivery = JSON.parse(req.body.delivery || 'null'); } catch {}
     if (delivery && delivery.mode === 'entrega') {
+      if (String(delivery.cep || '').replace(/\D/g, '').length !== 8) return res.status(400).json({ error: 'Informe o CEP (ou busque a sua rua) para a entrega.' });
       store.resolveDelivery({ ...delivery, fee_cents: 0 }, items); // valida antes de gastar uma consulta de mapa
       delivery = await geo.priceDelivery(delivery); // a taxa é sempre calculada aqui, nunca vinda do cliente
       if (delivery.too_far) return res.status(400).json({ error: `Esse endereço fica a ≈ ${String(delivery.km).replace('.', ',')} km e só entregamos até ${String(delivery.max_km).replace('.', ',')} km. Escolha a retirada no local.` });

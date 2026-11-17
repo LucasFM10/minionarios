@@ -129,6 +129,26 @@ async function geocodeAddress({ address, bairro, cep }, s, trace = []) {
   return null;
 }
 
+// ---------- ViaCEP (Correios): rua e bairro oficiais ----------
+const UFCITY = { uf: 'PB', city: 'Joao Pessoa' };
+const viaFmt = (r) => ({ cep: String(r.cep || '').replace(/\D/g, ''), rua: r.logradouro || '', bairro: r.bairro || '', complemento: r.complemento || '', cidade: r.localidade || '' });
+
+/** CEP → { cep, rua, bairro } ou null (inexistente). Lança erro se o serviço não responder. */
+async function viaCep(cep) {
+  const d = String(cep || '').replace(/\D/g, '');
+  if (d.length !== 8) return null;
+  const j = await getJson(`https://viacep.com.br/ws/${d}/json/`);
+  return j && !j.erro ? viaFmt(j) : null;
+}
+
+/** Nome da rua → lista de ruas de João Pessoa com CEP (até `limit`). */
+async function viaCepSearch(street, limit = 8) {
+  const q = String(street || '').replace(/^(rua|r\.|avenida|av\.?|travessa|trav\.?)\s+/i, '').replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (q.length < 3) return [];
+  const j = await getJson(`https://viacep.com.br/ws/${UFCITY.uf}/${encodeURIComponent(UFCITY.city)}/${encodeURIComponent(q)}/json/`);
+  return Array.isArray(j) ? j.slice(0, limit).map(viaFmt) : [];
+}
+
 async function getOrigin(s, trace = []) {
   const lat = parseFloat(s.pickup_lat), lng = parseFloat(s.pickup_lng);
   if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
@@ -198,4 +218,4 @@ async function priceDelivery(d, trace = []) {
   return base;
 }
 
-module.exports = { priceDelivery, feeFor, haversineKm, setFetch, geocodeAddress, getOrigin, splitAddress };
+module.exports = { viaCep, viaCepSearch, priceDelivery, feeFor, haversineKm, setFetch, geocodeAddress, getOrigin, splitAddress };

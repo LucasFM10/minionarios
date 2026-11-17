@@ -36,6 +36,19 @@ global.fetch = async (url, opts = {}) => {
     if (/marieta/i.test(q)) return json({ features: [{ geometry: { coordinates: [-34.83, -7.10] } }] });
     return json({ features: [] });
   }
+  if (u.startsWith('https://viacep.com.br/ws/')) {
+    const path = decodeURIComponent(u.slice('https://viacep.com.br/ws/'.length));
+    const golfo = { cep: '58037-030', logradouro: 'Rua Golfo de Lion', complemento: '', bairro: 'Manaíra', localidade: 'João Pessoa', uf: 'PB' };
+    if (path.startsWith('58037030')) return json(golfo);
+    if (path.startsWith('01001000')) return json({ cep: '01001-000', logradouro: 'Praça da Sé', bairro: 'Sé', localidade: 'São Paulo', uf: 'SP' });
+    if (/^\d{8}/.test(path)) return json({ erro: true });
+    if (/golfo/i.test(path)) return json([golfo]);
+    if (/argemiro/i.test(path)) return json([
+      { cep: '58037-030', logradouro: 'Avenida Governador Argemiro de Figueiredo', complemento: 'até 999/1000', bairro: 'Jardim Oceania', localidade: 'João Pessoa' },
+      { cep: '58037-031', logradouro: 'Avenida Governador Argemiro de Figueiredo', complemento: 'de 1001 ao fim', bairro: 'Bessa', localidade: 'João Pessoa' },
+    ]);
+    return json([]);
+  }
   if (u.startsWith('https://cep.awesomeapi.com.br')) return json({ status: 404 }, false);
   if (u.startsWith('https://router.project-osrm.org')) return json({ routes: [{ distance: routeMeters }] });
   if (u.startsWith('https://brasilapi.com.br')) return json({});
@@ -81,8 +94,10 @@ test('pedido pelo chat com entrega: endereço, taxa por km e confirmação', asy
   await inbound('1'); // nome = pushName
   assert.match(last(), /Como você quer receber/);
   await inbound('2');
-  assert.match(last(), /endereço completo/);
-  await inbound('Rua Golfo de Lion, 120, Manaíra');
+  assert.match(last(), /Qual é o seu \*CEP\*/);
+  await inbound('58037-030');
+  assert.match(last(), /📍 \*Rua Golfo de Lion\* — Manaíra/);
+  await inbound('120, apto 302');
   assert.match(last(), /Taxa: R\$ 7,50 \(≈ 4,2 km\)/);
   const itens = Number(last().match(/Itens: R\$ ([\d,]+)/)[1].replace(',', '.')) * 100;
   assert.match(last(), new RegExp('Total no Pix: R\\$ ' + ((itens + 750) / 100).toFixed(2).replace('.', ',')));
@@ -99,11 +114,13 @@ test('endereço acima de 9 km: o bot não aceita entrega e oferece retirada', as
   await inbound('0');
   await inbound('1');
   await inbound('2');
+  await inbound('Golfo de Lion');
   routeMeters = 12000;
-  await inbound('Rua Golfo de Lion, 900, Manaíra');
+  await inbound('900');
   routeMeters = 4210;
   assert.match(last(), /só entregamos até \*9 km\*/);
   assert.match(last(), /\*1\* para \*retirar no local\*/);
+  assert.strictEqual(store.getSession(JID).state, 'address');
   await inbound('1');
   assert.match(last(), /Retirada/i);
   await inbound('3'); // cancela na confirmação
@@ -257,4 +274,27 @@ test('mapa robusto: Nominatim fora do ar → Photon; rua não achada → centro 
   assert.ok(b.fee_cents != null, t2.join('\n'));
   assert.strictEqual(b.precision, 'bairro');
   nominatimDown = false;
+});
+
+test('endereço no bot: busca de rua com várias opções, CEP inválido e CEP de outra cidade', async () => {
+  store.setHuman(JID, 'none');
+  await inbound('menu'); await inbound('1'); await inbound('1'); await inbound('0'); await inbound('1'); await inbound('2');
+  await inbound('99999999');
+  assert.match(last(), /Não encontrei esse CEP/);
+  await inbound('01001-000');
+  assert.match(last(), /Só entregamos em João Pessoa/);
+  await inbound('av argemiro de figueiredo');
+  assert.match(last(), /\*1\* — Avenida Governador Argemiro de Figueiredo, Jardim Oceania \(até 999\/1000\)/);
+  assert.match(last(), /\*2\* — .*Bessa/);
+  await inbound('1');
+  assert.match(last(), /Agora envie o \*número\*/);
+  await inbound('apto');
+  assert.match(last(), /Qual é o \*número\*/);
+  await inbound('125, apto 102');
+  assert.match(last(), /Avenida Governador Argemiro de Figueiredo, 125/);
+  const d = store.getSession(JID).data.delivery;
+  assert.strictEqual(d.cep, '58037030');
+  assert.strictEqual(d.bairro, 'Jardim Oceania');
+  assert.strictEqual(d.ref, 'apto 102');
+  await inbound('3');
 });

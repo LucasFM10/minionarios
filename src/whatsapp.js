@@ -338,7 +338,7 @@ async function handleWebhook(body) {
   }
 }
 
-const IN_PROGRESS = ['ordering', 'name', 'phone', 'mode', 'address', 'confirm'];
+const IN_PROGRESS = ['ordering', 'name', 'phone', 'mode', 'address', 'address_pick', 'address_num', 'confirm'];
 const HELP_RE = /\b(atendente|humano|ajuda|suporte|reclama\w*|problema|falar com (a |um |uma )?(equipe|atendente|humano|pessoa)|(cancelar|alterar|trocar|mudar) (o |meu |esse |este )?pedido)\b/;
 
 const HELP_REPLY = `🙋 Certo! Avisei a equipe — *uma pessoa da equipe vai entrar em contato com você em breve* (pode ser por outro número).\n\nEnquanto isso, continuo por aqui:\n*2* — Acompanhar o status do pedido\n*menu* — Ver todas as opções`;
@@ -531,22 +531,51 @@ async function handleMessage(data) {
       if (t === '1' || t.includes('retir')) return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
       if (t === '2' || t.includes('entreg') || t.includes('casa')) {
         store.saveSession(jid, 'address', session.data);
-        return reply('🛵 Envie o seu *endereço completo*: rua, número e bairro (e o CEP, se souber) — e um ponto de referência, se quiser.\n\nA taxa é calculada pela distância: *R$ 5,00 até 2 km* + R$ 1,00 por km adicional (entregamos até 9 km).');
+        return reply(ASK_CEP);
       }
       return reply('Responda *1* para retirar no local ou *2* para receber em casa.');
     }
-    case 'address': {
-      if (t === '1') return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
-      if (text.length < 6) return reply('Envie a *rua, o número e o bairro* (ou *1* para retirar no local).');
-      const cepM = text.match(/\b\d{5}-?\d{3}\b/);
-      const addr = text.replace(cepM ? cepM[0] : '', '').replace(/\s+/g, ' ').replace(/[,\s]+$/, '').trim().slice(0, 160);
-      const parts = addr.split(',').map((x) => x.trim()).filter(Boolean);
-      const delivery = await geo.priceDelivery({ address: addr, cep: cepM ? cepM[0] : '', bairro: parts.length >= 3 ? parts[parts.length - 1] : '' });
+    case 'address':
+    case 'address_pick': {
+      if (t === '1' && session.state === 'address') return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
+      const opts = session.state === 'address_pick' ? session.data.opts || [] : [];
+      const n = /^\d{1,2}$/.test(t) ? parseInt(t, 10) : 0;
+      if (opts.length && n >= 1 && n <= opts.length) return askNumber(jid, session.data, opts[n - 1]);
+      if (opts.length && t === '0') { store.saveSession(jid, 'address', { ...session.data, opts: undefined }); return reply(ASK_CEP); }
+      const cepD = (text.match(/\b\d{5}-?\d{3}\b/) || [''])[0].replace(/\D/g, '');
+      try {
+        if (cepD) {
+          const a = await geo.viaCep(cepD);
+          if (!a) return reply('Não encontrei esse CEP 🤔 Confira os números ou mande o *nome da rua* que eu procuro.');
+          if (!a.rua) return reply('Esse é um CEP geral da cidade. Mande o *nome da sua rua* que eu procuro.');
+          if (!/jo[aã]o pessoa|cabedelo|bayeux/i.test(a.cidade)) return reply(`Esse CEP é de ${a.cidade}. Só entregamos em João Pessoa 😕 Envie outro CEP ou *1* para retirar no local.`);
+          return askNumber(jid, session.data, a);
+        }
+        if (text.replace(/[^\p{L}]/gu, '').length < 3) return reply(ASK_CEP);
+        const found = await geo.viaCepSearch(text.replace(/,.*$/, '').replace(/\d+/g, ''), 6);
+        if (!found.length) return reply('Não encontrei essa rua em João Pessoa 🤔 Tente só uma parte do nome (ex.: *Golfo de Lion*) ou envie o *CEP*.');
+        if (found.length === 1) return askNumber(jid, session.data, found[0]);
+        store.saveSession(jid, 'address_pick', { ...session.data, opts: found });
+        return reply(`Encontrei estas ruas. Qual é a sua?\n\n${found.map((a, k) => `*${k + 1}* — ${a.rua}, ${a.bairro}${a.complemento ? ` (${a.complemento})` : ''}`).join('\n')}\n\n*0* — Nenhuma delas (buscar de novo)`);
+      } catch (e) {
+        console.error('[wa] viacep:', e.message);
+        return reply('Não consegui consultar o endereço agora 😕 Tente de novo em instantes, ou envie *1* para retirar no local.');
+      }
+    }
+    case 'address_num': {
+      const a = session.data.addr;
+      if (!a) { store.saveSession(jid, 'address', session.data); return reply(ASK_CEP); }
+      if (t === '0') { store.saveSession(jid, 'address', { ...session.data, addr: undefined }); return reply(ASK_CEP); }
+      const m = text.match(/^\s*(s\/?n|\d+[a-z]?)\b[\s,.-]*(.*)$/i);
+      if (!m) return reply(`Qual é o *número*? Ex.: *120* ou *120, apto 302* (ou *s/n*).\nEnvie *0* para trocar a rua.`);
+      const num = m[1].toLowerCase().replace('sn', 's/n'), ref = m[2].trim().slice(0, 160);
+      const delivery = await geo.priceDelivery({ address: `${a.rua}, ${num}`, bairro: a.bairro, cep: a.cep, ref });
       if (delivery.too_far) {
         const km = (v) => String(v).replace('.', ',');
-        return reply(`😕 Esse endereço fica a ≈ ${km(delivery.km)} km, e só entregamos até *${km(delivery.max_km)} km*.\n\nEnvie *1* para *retirar no local* (${s.pickup_address}) ou mande outro endereço.`);
+        store.saveSession(jid, 'address', { ...session.data, addr: undefined });
+        return reply(`😕 Esse endereço fica a ≈ ${km(delivery.km)} km, e só entregamos até *${km(delivery.max_km)} km*.\n\nEnvie *1* para *retirar no local* (${s.pickup_address}) ou mande outro CEP.`);
       }
-      return askConfirm(jid, { ...session.data, delivery });
+      return askConfirm(jid, { ...session.data, addr: undefined, opts: undefined, delivery });
     }
     case 'confirm': {
       if (t === '1' || t === 'sim' || t === 'confirmar') {
@@ -606,6 +635,15 @@ async function handleMessage(data) {
       return reply(mainMenuText(s, data.pushName));
     }
   }
+}
+
+const ASK_CEP =
+  '🛵 Qual é o seu *CEP*? (ex.: *58037-030*)\nSe não souber, mande o *nome da rua* que eu procuro.\n\nA taxa é calculada pela distância: *R$ 5,00 até 2 km* + R$ 1,00 por km adicional (entregamos até 9 km). Envie *1* para retirar no local.';
+
+function askNumber(jid, data, a) {
+  const addr = { cep: a.cep, rua: a.rua, bairro: a.bairro };
+  store.saveSession(jid, 'address_num', { ...data, opts: undefined, addr });
+  return sendText(jid, `📍 *${addr.rua}* — ${addr.bairro} (CEP ${addr.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2')})\n\nAgora envie o *número* e, se quiser, o complemento/referência.\nEx.: *120, apto 302, perto da padaria*\n\n*0* — Trocar a rua`);
 }
 
 function startOrdering(jid, s, accepting) {

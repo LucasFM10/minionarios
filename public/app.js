@@ -14,7 +14,7 @@
   let S = {}, PRODUCTS = [], CATS = [];
   const byId = (id) => PRODUCTS.find((p) => p.id === +id);
   let bag = store.get('mn_bag2', {});
-  let cliente = Object.assign({ nome: '', tel: '', obs: '', modo: '', bairro: '', rua: '', ref: '' }, store.get('mn_cliente2', {}));
+  let cliente = Object.assign({ nome: '', tel: '', obs: '', modo: '', bairro: '', rua: '', num: '', ref: '', cep: '' }, store.get('mn_cliente3', {}));
   let pedido = null, sending = false, waSent = true, closeWarned = false;
   const hasBurger = () => Object.keys(bag).some((k) => byId(k) && BURGER_CATS.includes(norm(byId(k).category)));
 
@@ -158,10 +158,13 @@
           <label class="opt${podeEntregar ? '' : ' off'}"><input type="radio" name="modo" value="entrega" ${cliente.modo === 'entrega' ? 'checked' : ''} ${podeEntregar ? '' : 'disabled'}><div><b>Receber em casa</b><span>${podeEntregar ? 'Entrega em João Pessoa na noite do evento. A taxa é calculada pela distância.' : 'A entrega vale só para pedidos com pelo menos um hambúrguer ou combo.'}</span></div></label>
         </div><span class="err" id="eModo" hidden>Escolha retirar no local ou receber em casa.</span></div>
       <div id="addr" hidden>
-        <div class="field"><label for="cep">CEP <span style="font-weight:400;color:var(--muted)">(opcional — preenche a rua)</span></label><input id="cep" inputmode="numeric" autocomplete="postal-code" value="${esc(cliente.cep || '')}" placeholder="00000-000"><span class="err" id="eCep" hidden></span></div>
-        <div class="field"><label for="rua">Rua e número</label><input id="rua" autocomplete="street-address" value="${esc(cliente.rua)}" placeholder="Ex.: Rua Golfo de Lion, 120"><span class="err" id="eRua" hidden>Digite a rua e o número.</span></div>
-        <div class="field"><label for="bairro">Bairro</label><input id="bairro" value="${esc(cliente.bairro)}" placeholder="Ex.: Manaíra"><span class="err" id="eBairro" hidden>Digite o seu bairro.</span><div id="taxaBox" hidden></div></div>
-        <div class="field"><label for="ref">Complemento e ponto de referência</label><input id="ref" value="${esc(cliente.ref)}" placeholder="Ex.: apto 302, perto da padaria"></div>
+        <div class="field" id="cepField"><label for="cep">CEP</label><input id="cep" inputmode="numeric" autocomplete="postal-code" value="${esc(cliente.cep ? cliente.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2') : '')}" placeholder="00000-000">
+          <button type="button" class="linkbtn" id="noCep">Não sei meu CEP — buscar pela rua</button>
+          <div id="ruaSearch" hidden><input id="ruaQ" autocomplete="off" placeholder="Nome da rua (ex.: Golfo de Lion)"><div id="ruaRes" class="ruares"></div></div>
+          <span class="err" id="eCep" hidden></span></div>
+        <div class="found" id="found" hidden></div>
+        <div class="field" id="numField" hidden><label for="num">Número</label><input id="num" value="${esc(cliente.num || '')}" placeholder="Ex.: 120 (ou s/n)" maxlength="12"><span class="err" id="eNum" hidden>Digite o número da casa ou prédio.</span><div id="taxaBox" hidden></div></div>
+        <div class="field" id="refField" hidden><label for="ref">Complemento e ponto de referência</label><input id="ref" value="${esc(cliente.ref)}" placeholder="Ex.: apto 302, perto da padaria"></div>
       </div>
       <div class="field"><span class="legend">Pagamento</span>
         <div class="opts">
@@ -187,50 +190,85 @@
       const t = taxaAtual();
       $('#nextT').textContent = brl(bagTotal() + (typeof t === 'number' ? t : 0));
     };
+    // Endereço sempre vindo dos Correios (ViaCEP): a pessoa só digita número e complemento.
+    let addr = cliente.cep && cliente.rua ? { cep: cliente.cep, rua: cliente.rua, bairro: cliente.bairro } : null;
+    const showAddr = () => {
+      const ok = !!addr;
+      $('#found').hidden = !ok; $('#numField').hidden = !ok; $('#refField').hidden = !ok; $('#noCep').hidden = ok; if (ok) $('#ruaSearch').hidden = true;
+      if (ok) $('#found').innerHTML = `<div><b>📍 ${esc(addr.rua)}</b><span>${esc(addr.bairro)} · CEP ${addr.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2')}</span></div><button type="button" class="linkbtn" id="chAddr">trocar</button>`;
+    };
+    const setAddr = (a) => { addr = a; showAddr(); if (a) { $('#cep').value = a.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2'); $('#ruaSearch').hidden = true; $('#num').focus(); } requote(); };
+    const cepErr = (m) => { const el = $('#eCep'); el.hidden = !m; el.textContent = m || ''; };
     const requote = () => {
       clearTimeout(qTimer);
-      if (modo() !== 'entrega') { quote = null; return paint(); }
-      const rua = $('#rua').value.trim(), bairro = $('#bairro').value.trim(), cepV = $('#cep').value.replace(/\D/g, '');
-      if (rua.length < 4 || (!bairro && cepV.length !== 8)) { quote = null; return paint(); }
+      if (modo() !== 'entrega' || !addr) { quote = null; return paint(); }
+      const num = $('#num').value.trim();
       quote = { loading: true }; paint();
       const my = ++qSeq;
       qTimer = setTimeout(async () => {
         try {
-          const r = await fetch('/api/delivery/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: rua, bairro, cep: cepV }) }).then((r) => r.json());
+          const r = await fetch('/api/delivery/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: num ? `${addr.rua}, ${num}` : addr.rua, bairro: addr.bairro, cep: addr.cep }) }).then((r) => r.json());
           if (my === qSeq) { quote = { fee_cents: r.fee_cents ?? null, km: r.km, too_far: !!r.too_far, max_km: r.max_km }; paint(); }
         } catch { if (my === qSeq) { quote = { fee_cents: null }; paint(); } }
-      }, 700);
+      }, 600);
     };
     const refresh = () => { paint(); requote(); };
     $('#shFoot').innerHTML = `<button class="cta dark" type="button" id="next"><span>Fechar pedido</span><span class="price" id="nextT">${brl(bagTotal())}</span></button>`;
-    $('#f').addEventListener('change', refresh); $('#f').addEventListener('input', (e) => { if (['rua', 'bairro'].includes(e.target.id)) requote(); }); refresh();
+    $('#f').addEventListener('change', (e) => { if (e.target.name === 'modo') refresh(); });
+    $('#f').addEventListener('input', (e) => { if (e.target.id === 'num') { $('#eNum').hidden = true; requote(); } });
+    $('#f').addEventListener('click', (e) => {
+      if (e.target.id === 'chAddr') { addr = null; showAddr(); $('#cep').value = ''; cepErr(''); $('#cep').focus(); requote(); }
+      if (e.target.id === 'noCep') { const rs = $('#ruaSearch'); rs.hidden = !rs.hidden; if (!rs.hidden) $('#ruaQ').focus(); }
+      const pick = e.target.closest('[data-pick]');
+      if (pick) { const r = ruaResults[+pick.dataset.pick]; if (r) { cepErr(''); setAddr({ cep: r.cep, rua: r.rua, bairro: r.bairro }); } }
+    });
+    showAddr(); refresh();
     const cep = $('#cep');
     cep.oninput = async () => {
       let d = cep.value.replace(/\D/g, '').slice(0, 8);
       cep.value = d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
-      $('#eCep').hidden = true;
+      cepErr('');
+      if (addr && addr.cep !== d) { addr = null; showAddr(); requote(); }
       if (d.length !== 8) return;
       try {
         const r = await fetch(`https://viacep.com.br/ws/${d}/json/`).then((r) => r.json());
-        if (r.erro) throw new Error('CEP não encontrado. Digite a rua manualmente.');
-        if (r.logradouro) { $('#rua').value = `${r.logradouro}, `; $('#rua').focus(); }
-        if (r.bairro) $('#bairro').value = r.bairro;
-        requote();
-      } catch (e) { const el = $('#eCep'); el.hidden = false; el.style.color = ''; el.textContent = e.message.includes('CEP') ? e.message : 'Não foi possível consultar o CEP. Digite a rua manualmente.'; }
+        if (r.erro) return cepErr('CEP não encontrado. Confira os números ou busque pela rua.');
+        if (!r.logradouro) return cepErr('Esse é um CEP geral da cidade. Busque pela sua rua logo abaixo.');
+        if (!/jo[aã]o pessoa|cabedelo|bayeux/i.test(r.localidade || '')) return cepErr(`Esse CEP é de ${r.localidade}. Só entregamos em João Pessoa.`);
+        setAddr({ cep: d, rua: r.logradouro, bairro: r.bairro || '' });
+      } catch { cepErr('Não foi possível consultar o CEP agora. Tente de novo ou busque pela rua.'); }
+    };
+    let ruaResults = [], sTimer = null, sSeq = 0;
+    $('#ruaQ').oninput = () => {
+      clearTimeout(sTimer);
+      const q = $('#ruaQ').value.trim(), box = $('#ruaRes');
+      if (q.length < 3) { box.innerHTML = ''; return; }
+      box.innerHTML = '<p class="hint">Buscando…</p>';
+      const my = ++sSeq;
+      sTimer = setTimeout(async () => {
+        try {
+          const r = await fetch('/api/address/search?q=' + encodeURIComponent(q)).then((r) => r.json());
+          if (my !== sSeq) return;
+          ruaResults = r.results || [];
+          box.innerHTML = ruaResults.length
+            ? ruaResults.map((x, i) => `<button type="button" data-pick="${i}"><b>${esc(x.rua)}</b><span>${esc(x.bairro)}${x.complemento ? ' · ' + esc(x.complemento) : ''} · ${x.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2')}</span></button>`).join('')
+            : '<p class="hint">Nenhuma rua encontrada em João Pessoa. Tente só uma parte do nome (ex.: "Golfo").</p>';
+        } catch { if (my === sSeq) box.innerHTML = '<p class="err">Não foi possível buscar agora. Tente de novo.</p>'; }
+      }, 450);
     };
     $('#next').onclick = async () => {
       const nome = $('#nome').value.trim(), t = $('#tel').value, d = t.replace(/\D/g, ''), m = modo(), obs = $('#obs').value.trim();
-      const bairro = $('#bairro').value, rua = $('#rua').value.trim(), ref = $('#ref').value.trim();
+      const num = $('#num').value.trim(), ref = $('#ref').value.trim();
       $('#eNome').hidden = nome.length >= 2; $('#eTel').hidden = d.length >= 10; $('#eModo').hidden = !!m;
-      const ent = m === 'entrega'; $('#eBairro').hidden = true; $('#eRua').hidden = !ent || rua.length >= 4;
+      const ent = m === 'entrega';
       if (nome.length < 2) { $('#nome').focus(); return; } if (d.length < 10) { $('#tel').focus(); return; }
       if (!m) { $('#eModo').scrollIntoView({ block: 'center' }); return; }
-      if (ent && rua.length < 4) { $('#rua').focus(); return; }
+      if (ent && !addr) { cepErr('Informe o CEP ou busque a sua rua.'); $('#cep').focus(); return; }
+      if (ent && !num) { $('#eNum').hidden = false; $('#num').focus(); return; }
       if (ent && quote && quote.too_far) { $('#taxaBox').scrollIntoView({ block: 'center' }); return; }
-      const cepV = ent ? $('#cep').value.trim() : '';
-      cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '', cep: cepV }; store.set('mn_cliente2', cliente);
+      cliente = { nome, tel: t, obs, modo: m, bairro: ent ? addr.bairro : '', rua: ent ? addr.rua : '', num: ent ? num : '', ref: ent ? ref : '', cep: ent ? addr.cep : '' }; store.set('mn_cliente3', cliente);
       const items = Object.entries(bag).map(([k, q]) => ({ product_id: +k, qty: q }));
-      const delivery = ent ? { mode: 'entrega', bairro, address: rua, cep: cepV.replace(/\D/g, ''), ref } : { mode: 'retirada' };
+      const delivery = ent ? { mode: 'entrega', bairro: addr.bairro, address: `${addr.rua}, ${num}`, cep: addr.cep, ref } : { mode: 'retirada' };
       pedido = { items, delivery };
       createOrder();
     };
