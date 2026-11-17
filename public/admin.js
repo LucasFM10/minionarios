@@ -240,6 +240,7 @@
           ? `<div class="receipt">${o.receipt_mime === 'application/pdf' ? `<iframe src="${rUrl}"></iframe>` : `<a href="${rUrl}" target="_blank"><img src="${rUrl}" alt="Comprovante" /></a>`}<div class="rf"><span class="muted">Confira valor (${brl(o.total_cents)}), data e recebedor</span><a class="btn sm" href="${rUrl}" target="_blank">Abrir ↗</a></div></div>`
           : `<div class="noreceipt">Nenhum comprovante ainda.<br><small>${o.source === 'site' && !o.wa_jid ? 'O cliente ainda não concluiu o pedido no WhatsApp.' : 'O cliente envia pelo WhatsApp.'}</small></div>`}</div>
         <div class="sec"><h3>Histórico</h3><ul class="tl">${ev.map((e) => `<li style="--c:${COLOR[e.status] || '#ccc'}"><span>${esc(sInfo(e.status).label)}</span><time>${dt(e.created_at)}</time></li>`).join('')}</ul></div>
+        <div class="sec" style="text-align:center"><button class="btn sm" id="drDel" style="color:var(--s6);background:transparent;border-color:transparent">🗑 Excluir pedido</button></div>
       </div>
       ${o.wa_jid ? `<div style="padding:0 20px 10px"><button class="btn block" id="drChat">💬 Ver conversa no WhatsApp</button></div>` : ''}
       <div class="dr-f">
@@ -261,6 +262,22 @@
     const fx = $('#feePix'); if (fx) fx.onclick = async () => {
       try { const { payload } = await api(`/api/admin/orders/${o.id}/fee/pix`); await navigator.clipboard.writeText(payload); toast('Pix copia e cola da taxa copiado'); }
       catch (e) { feeErr(e.message); }
+    };
+    $('#drDel').onclick = () => {
+      modal(`Excluir pedido #${o.number_label}?`, `
+        <p>O pedido de <b>${esc(o.customer_name)}</b> (${brl(o.total_cents)}${o.has_receipt ? ', <b>com comprovante</b>' : ''}) será apagado de vez, junto com o histórico e o comprovante.</p>
+        <p class="muted" style="font-size:13px">Use só para pedidos de teste, duplicados ou feitos sem querer. Para um pedido real que não vai acontecer, prefira <b>Cancelar</b>. O número #${o.number_label} não será reaproveitado.</p>
+        <label class="fld"><span>Para confirmar, digite o número do pedido (${o.number_label})</span><input class="inp" id="delConf" inputmode="numeric" autocomplete="off" /></label>
+        <div style="display:flex;gap:8px;margin-top:12px"><button class="btn block" data-close>Voltar</button><button class="btn danger block" id="delGo" disabled>Excluir de vez</button></div>
+        <p class="err" id="delErr"></p>`);
+      const inp = $('#delConf'), go = $('#delGo');
+      inp.oninput = () => { go.disabled = inp.value.replace(/\D/g, '').padStart(3, '0') !== o.number_label; };
+      inp.focus();
+      go.onclick = async () => {
+        go.disabled = true;
+        try { await api(`/api/admin/orders/${o.id}`, { method: 'DELETE' }); $('#modal').close(); closeDrawer(); toast(`Pedido #${o.number_label} excluído`); loadOrders(); }
+        catch (e) { $('#delErr').textContent = e.message; go.disabled = false; }
+      };
     };
     const dc = $('#drChat'); if (dc) dc.onclick = () => { closeDrawer(); openJid = o.wa_jid; $('[data-tab=chats]').click(); };
     $('#drawer').onclick = (e) => { const b = e.target.closest('[data-st]'); if (b && b.dataset.st !== o.status) setStatus(o.id, b.dataset.st); };

@@ -214,3 +214,18 @@ test('taxa "a combinar" calculada depois: fica à parte, aparece no status e pod
   await inbound('status');
   assert.match(last(), /Taxa de entrega: R\$ 7,50 \(≈ 4,2 km\) — paga ✅/);
 });
+
+test('excluir pedido: some de vez (histórico e comprovante juntos) e o número não é reaproveitado', async () => {
+  const o = store.createOrder({ customer_name: 'Teste', phone: '83990000000', items: [{ product_id: 1, qty: 1 }], source: 'admin' });
+  const fs = require('fs'), path = require('path');
+  fs.writeFileSync(path.join(store.DATA_DIR, 'uploads', 'receipts', 'x.jpg'), 'x');
+  store.attachReceipt(o.id, 'receipts/x.jpg', 'image/jpeg');
+  store.updateOrderStatus(o.id, 'pagamento_confirmado');
+  assert.ok(store.deleteOrder(o.id));
+  assert.strictEqual(store.getOrderById(o.id), null);
+  assert.strictEqual(store.orderEvents(o.id).length, 0);
+  assert.ok(!fs.existsSync(path.join(store.DATA_DIR, 'uploads', 'receipts', 'x.jpg')));
+  const n = store.createOrder({ customer_name: 'Depois', phone: '83990000000', items: [{ product_id: 1, qty: 1 }], source: 'admin' });
+  assert.ok(n.number > o.number);
+  assert.strictEqual(store.deleteOrder(999999), null);
+});

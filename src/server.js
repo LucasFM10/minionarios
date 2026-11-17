@@ -252,6 +252,13 @@ app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
   }
 });
 
+app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
+  const o = store.deleteOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: 'Não encontrado' });
+  console.log(`[admin] pedido #${o.number_label} excluído (${o.customer_name}, ${o.total_cents})`);
+  res.json({ ok: true });
+});
+
 // Taxa de pedidos que ficaram "a combinar": calcula pela distância (ou valor manual) e controla o pagamento à parte.
 app.post('/api/admin/orders/:id/fee', requireAdmin, async (req, res) => {
   try {

@@ -249,6 +249,15 @@ function hydrateOrder(o) {
   };
 }
 
+/** Exclui um pedido de vez (testes, duplicados). O histórico sai junto (ON DELETE CASCADE); o número não é reaproveitado. */
+function deleteOrder(id) {
+  const o = getOrderById(id);
+  if (!o) return null;
+  db.prepare('DELETE FROM orders WHERE id = ?').run(o.id);
+  if (o.receipt_path) { try { fs.unlinkSync(path.join(DATA_DIR, 'uploads', o.receipt_path)); } catch {} }
+  return o;
+}
+
 /** Pedidos de entrega ainda com taxa "a combinar". */
 const ordersWithoutFee = () =>
   db.prepare("SELECT id FROM orders WHERE delivery_mode = 'entrega' AND delivery_fee_cents IS NULL AND status != 'cancelado' ORDER BY id").all().map((r) => r.id);
@@ -497,6 +506,7 @@ const markChatRead = (jid) => db.prepare('UPDATE wa_chats SET unread = 0 WHERE j
 const chatStates = () => Object.fromEntries(db.prepare('SELECT jid, human_status, unread FROM wa_chats').all().map((c) => [c.jid, c]));
 
 module.exports = {
+  deleteOrder,
   ordersWithoutFee,
   setLateFee,
   setFeePaid,
