@@ -12,6 +12,7 @@ const wa = require('../src/whatsapp');
 // ---- simulated network: Evolution + OpenStreetMap + OSRM ----
 const sent = [];
 let msgSeq = 0;
+let routeMeters = 4210;
 global.fetch = async (url, opts = {}) => {
   const u = String(url);
   const json = (b, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => b, text: async () => JSON.stringify(b) });
@@ -26,7 +27,7 @@ global.fetch = async (url, opts = {}) => {
     if (/golfo/i.test(q)) return json([{ lat: '-7.1300', lon: '-34.8300' }]); // ~3,3 km ao sul
     return json([]);
   }
-  if (u.startsWith('https://router.project-osrm.org')) return json({ routes: [{ distance: 4210 }] });
+  if (u.startsWith('https://router.project-osrm.org')) return json({ routes: [{ distance: routeMeters }] });
   if (u.startsWith('https://brasilapi.com.br')) return json({});
   throw new Error('rede inesperada: ' + u);
 };
@@ -38,18 +39,24 @@ const human = (text) => wa.handleWebhook({ event: 'messages.upsert', data: { key
 const last = () => sent[sent.length - 1]?.text || '';
 const countBefore = () => sent.length;
 
-test('taxa: R$ 1,00 por km, arredondando para cima de 50 em 50 centavos', () => {
-  assert.strictEqual(geo.feeFor(4.21), 450);
-  assert.strictEqual(geo.feeFor(4.0), 400);
-  assert.strictEqual(geo.feeFor(4.01), 450);
-  assert.strictEqual(geo.feeFor(0.2), 50);
-  assert.strictEqual(geo.feeFor(1.0, { min: 700 }), 700);
+test('taxa: R$ 5,00 até 2 km, depois +R$ 1,00 por km (arredonda de 50 em 50 centavos)', () => {
+  assert.strictEqual(geo.feeFor(0.4), 500);
+  assert.strictEqual(geo.feeFor(2.0), 500);
+  assert.strictEqual(geo.feeFor(2.3), 550);
+  assert.strictEqual(geo.feeFor(3.0), 600);
+  assert.strictEqual(geo.feeFor(4.21), 750);
+  assert.strictEqual(geo.feeFor(9.0), 1200);
 });
 
 test('priceDelivery calcula distância por rota e taxa; sem endereço localizado vira "a combinar"', async () => {
   const ok = await geo.priceDelivery({ address: 'Rua Golfo de Lion, 120', bairro: 'Manaíra' });
   assert.strictEqual(ok.km, 4.2);
-  assert.strictEqual(ok.fee_cents, 450);
+  assert.strictEqual(ok.fee_cents, 750);
+  routeMeters = 9600;
+  const far = await geo.priceDelivery({ address: 'Rua Golfo de Lion, 120', bairro: 'Manaíra' });
+  assert.ok(far.too_far, 'acima de 9 km não entrega');
+  assert.strictEqual(far.fee_cents, null);
+  routeMeters = 4210;
   const bad = await geo.priceDelivery({ address: 'Rua Que Nao Existe, 1', bairro: 'Lugar Nenhum' });
   assert.strictEqual(bad.fee_cents, null);
   // o resultado do mapa fica em cache
@@ -66,13 +73,30 @@ test('pedido pelo chat com entrega: endereço, taxa por km e confirmação', asy
   await inbound('2');
   assert.match(last(), /endereço completo/);
   await inbound('Rua Golfo de Lion, 120, Manaíra');
-  assert.match(last(), /Taxa: R\$ 4,50 \(≈ 4,2 km\)/);
+  assert.match(last(), /Taxa: R\$ 7,50 \(≈ 4,2 km\)/);
   const itens = Number(last().match(/Itens: R\$ ([\d,]+)/)[1].replace(',', '.')) * 100;
-  assert.match(last(), new RegExp('Total no Pix: R\\$ ' + ((itens + 450) / 100).toFixed(2).replace('.', ',')));
+  assert.match(last(), new RegExp('Total no Pix: R\\$ ' + ((itens + 750) / 100).toFixed(2).replace('.', ',')));
   await inbound('1');
   const o = store.getOrderByNumber(1);
-  assert.strictEqual(o.delivery_fee_cents, 450);
-  assert.strictEqual(o.total_cents, itens + 450);
+  assert.strictEqual(o.delivery_fee_cents, 750);
+  assert.strictEqual(o.total_cents, itens + 750);
+});
+
+test('endereço acima de 9 km: o bot não aceita entrega e oferece retirada', async () => {
+  await inbound('menu');
+  await inbound('1');
+  await inbound('1');
+  await inbound('0');
+  await inbound('1');
+  await inbound('2');
+  routeMeters = 12000;
+  await inbound('Rua Golfo de Lion, 900, Manaíra');
+  routeMeters = 4210;
+  assert.match(last(), /só entregamos até \*9 km\*/);
+  assert.match(last(), /\*1\* para \*retirar no local\*/);
+  await inbound('1');
+  assert.match(last(), /Retirada/i);
+  await inbound('3'); // cancela na confirmação
 });
 
 test('"oi" no meio de um pedido não apaga a sacola', async () => {

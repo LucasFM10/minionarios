@@ -46,7 +46,7 @@ Fluxo do site: o cliente fecha o pedido (gera o número), toca em **Concluir ped
 - **Comprovante com vários pedidos em aberto**: se o número tiver mais de um pedido aguardando pagamento, o bot pergunta de qual pedido é a imagem (ou "dos dois/de todos", para um Pix único).
 - **Falar com a equipe** (opção *4*, "atendente", "cancelar" com pedido ativo): o bot avisa que alguém da equipe vai entrar em contato (pode ser por outro número) e **continua funcionando** (status, menu). O painel marca "🙋 Pediu ajuda" até alguém clicar em *Marcar como resolvido* em *Conversas*. Só se a equipe responder **pelo número do bot** é que ele pausa naquela conversa ("💬 Equipe atendendo"; retoma com "Resolvido — retomar bot" ou sozinho após 8 h).
 - **Conversas**: todas as mensagens e mídias (comprovantes, fotos) ficam salvas e aparecem em *Admin › Conversas* (somente leitura).
-- **Taxa de entrega**: distância de carro (OpenStreetMap/Nominatim + OSRM) × R$ 1,00/km, arredondada para cima de R$ 0,50. Ajustável em *Ajustes* (valor/km, arredondamento, taxa mínima, distância máxima, coordenadas da retirada). Se o endereço não for localizado, fica "taxa a combinar".
+- **Taxa de entrega**: distância de carro (OpenStreetMap/Nominatim + OSRM). **R$ 5,00 até 2 km**, depois **+R$ 1,00 por km**, arredondada para cima de R$ 0,50 (ex.: 4,2 km → R$ 7,50; 9 km → R$ 12,00). **Acima de 9 km não entregamos**: o site bloqueia a entrega e o bot oferece retirada. Tudo ajustável em *Ajustes* (taxa mínima, km incluídos, valor por km adicional, arredondamento, distância máxima, coordenadas da retirada). Se o endereço não for localizado, fica "taxa a combinar".
 - Pedidos sem comprovante há mais de 2 h aparecem destacados no painel.
 
 ## Deploy

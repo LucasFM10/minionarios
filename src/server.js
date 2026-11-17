@@ -132,7 +132,7 @@ app.post('/api/delivery/quote', rateLimit(40, 10 * 60000), async (req, res) => {
     const s = store.getSettings();
     if (s.delivery_enabled !== '1') return res.status(400).json({ error: 'Entrega indisponível.' });
     const d = await geo.priceDelivery({ address: req.body.address, bairro: req.body.bairro, cep: req.body.cep });
-    res.json({ km: d.km, fee_cents: d.fee_cents, approx: d.approx });
+    res.json({ km: d.km, fee_cents: d.fee_cents, approx: d.approx, too_far: !!d.too_far, max_km: d.max_km ?? null });
   } catch (e) {
     res.json({ km: null, fee_cents: null, approx: false });
   }
@@ -153,6 +153,7 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
     if (delivery && delivery.mode === 'entrega') {
       store.resolveDelivery({ ...delivery, fee_cents: 0 }, items); // valida antes de gastar uma consulta de mapa
       delivery = await geo.priceDelivery(delivery); // a taxa é sempre calculada aqui, nunca vinda do cliente
+      if (delivery.too_far) return res.status(400).json({ error: `Esse endereço fica a ≈ ${String(delivery.km).replace('.', ',')} km e só entregamos até ${String(delivery.max_km).replace('.', ',')} km. Escolha a retirada no local.` });
     }
     let order = store.createOrder({
       customer_name: req.body.name || '',
@@ -373,7 +374,7 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
 // Settings
 const EDITABLE = [
   'team_name', 'tagline', 'subtitle', 'event_date_label', 'pickup_label', 'location_note', 'instagram',
-  'whatsapp_number', 'pix_key', 'pix_name', 'pix_city', 'accepting_orders', 'delivery_per_km', 'delivery_round', 'delivery_min', 'delivery_max_km', 'pickup_lat', 'pickup_lng',
+  'whatsapp_number', 'pix_key', 'pix_name', 'pix_city', 'accepting_orders', 'delivery_per_km', 'delivery_round', 'delivery_min', 'delivery_base_km', 'delivery_max_km', 'pickup_lat', 'pickup_lng',
   'require_receipt', 'next_order_number', 'pickup_address', 'pickup_city', 'delivery_enabled', 'delivery_note',
 ];
 app.get('/api/admin/settings', requireAdmin, (req, res) => {

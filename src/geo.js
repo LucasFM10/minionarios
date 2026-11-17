@@ -102,11 +102,14 @@ async function roadKm(a, b) {
 
 const money = (v, d) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? Math.round(n * 100) : d; };
 
-/** km → centavos. perKm e step em centavos; arredonda sempre para cima no múltiplo de `step`. */
-function feeFor(km, { perKm = 100, step = 50, min = 0 } = {}) {
-  const raw = km * perKm;
-  const fee = step > 0 ? Math.ceil(raw / step - 1e-9) * step : Math.round(raw);
-  return Math.max(fee, min);
+/**
+ * km → centavos. `min` cobre os primeiros `baseKm`; cada km além disso soma `perKm`.
+ * Valores em centavos; arredonda sempre para cima no múltiplo de `step`.
+ * Ex. (padrão): 1,5 km → R$ 5,00 · 4,2 km → 5 + 2,2 = R$ 7,20 → R$ 7,50 · 9 km → R$ 12,00.
+ */
+function feeFor(km, { perKm = 100, step = 50, min = 500, baseKm = 2 } = {}) {
+  const raw = min + Math.max(0, km - baseKm) * perKm;
+  return step > 0 ? Math.ceil(raw / step - 1e-9) * step : Math.round(raw);
 }
 
 /** Recebe os dados do cliente e devolve o objeto de entrega JÁ precificado (só o servidor chama isto). */
@@ -116,10 +119,13 @@ async function priceDelivery(d) {
   const [origin, dest] = await Promise.all([getOrigin(s), geocodeAddress(base, s)]);
   if (!origin || !dest) return base;
   const { km, approx } = await roadKm(origin, dest);
-  const maxKm = parseFloat(String(s.delivery_max_km).replace(',', '.')) || 25;
+  const num = (v, d) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : d; };
+  const maxKm = num(s.delivery_max_km, 9);
   base.km = Math.round(km * 10) / 10;
   base.approx = approx;
-  if (km <= maxKm) base.fee_cents = feeFor(km, { perKm: money(s.delivery_per_km, 100), step: money(s.delivery_round, 50), min: money(s.delivery_min, 0) });
+  base.max_km = maxKm;
+  if (km > maxKm) base.too_far = true; // fora da área: não entregamos
+  else base.fee_cents = feeFor(km, { perKm: money(s.delivery_per_km, 100), step: money(s.delivery_round, 50), min: money(s.delivery_min, 500), baseKm: num(s.delivery_base_km, 2) });
   return base;
 }
 

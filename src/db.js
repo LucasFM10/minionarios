@@ -115,11 +115,12 @@ const DEFAULT_SETTINGS = {
   pickup_address: 'R. Marieta Steimbach Silva, 51 – Miramar',
   pickup_city: 'João Pessoa - PB',
   delivery_enabled: '1',
-  delivery_note: 'em João Pessoa, taxa calculada pela distância (R$ 1,00 por km)',
+  delivery_note: 'em João Pessoa, até 9 km: R$ 5,00 até 2 km + R$ 1,00 por km adicional',
   delivery_per_km: '1.00',
   delivery_round: '0.50',
-  delivery_min: '0',
-  delivery_max_km: '25',
+  delivery_min: '5.00',
+  delivery_base_km: '2',
+  delivery_max_km: '9',
   pickup_lat: '',
   pickup_lng: '',
   location_note: 'O local da retirada será divulgado no Instagram @minionarios.pspp',
@@ -204,6 +205,14 @@ if (!getSettingRaw('migr_original_v2')) {
 if (!getSettingRaw('migr_dist_v1')) {
   db.prepare("UPDATE settings SET value = 'em João Pessoa, taxa calculada pela distância (R$ 1,00 por km)' WHERE key = 'delivery_note' AND value LIKE '%taxa por bairro%'").run();
   insertSetting.run('migr_dist_v1', '1');
+}
+
+// Regra de taxa v2: R$ 5,00 até 2 km, +R$ 1,00 por km adicional, entrega só até 9 km.
+if (!getSettingRaw('migr_fee_v2')) {
+  const set = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+  set.run('5.00', 'delivery_min'); set.run('2', 'delivery_base_km'); set.run('1.00', 'delivery_per_km'); set.run('9', 'delivery_max_km');
+  set.run('em João Pessoa, até 9 km: R$ 5,00 até 2 km + R$ 1,00 por km adicional', 'delivery_note');
+  insertSetting.run('migr_fee_v2', '1');
 }
 
 // ---------- Orders ----------

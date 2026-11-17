@@ -528,7 +528,7 @@ async function handleMessage(data) {
       if (t === '1' || t.includes('retir')) return askConfirm(jid, { ...session.data, delivery: { mode: 'retirada' } });
       if (t === '2' || t.includes('entreg') || t.includes('casa')) {
         store.saveSession(jid, 'address', session.data);
-        return reply('🛵 Envie o seu *endereço completo*: rua, número e bairro (e o CEP, se souber) — e um ponto de referência, se quiser.\n\nA taxa de entrega é calculada pela distância.');
+        return reply('🛵 Envie o seu *endereço completo*: rua, número e bairro (e o CEP, se souber) — e um ponto de referência, se quiser.\n\nA taxa é calculada pela distância: *R$ 5,00 até 2 km* + R$ 1,00 por km adicional (entregamos até 9 km).');
       }
       return reply('Responda *1* para retirar no local ou *2* para receber em casa.');
     }
@@ -539,6 +539,10 @@ async function handleMessage(data) {
       const addr = text.replace(cepM ? cepM[0] : '', '').replace(/\s+/g, ' ').replace(/[,\s]+$/, '').trim().slice(0, 160);
       const parts = addr.split(',').map((x) => x.trim()).filter(Boolean);
       const delivery = await geo.priceDelivery({ address: addr, cep: cepM ? cepM[0] : '', bairro: parts.length >= 3 ? parts[parts.length - 1] : '' });
+      if (delivery.too_far) {
+        const km = (v) => String(v).replace('.', ',');
+        return reply(`😕 Esse endereço fica a ≈ ${km(delivery.km)} km, e só entregamos até *${km(delivery.max_km)} km*.\n\nEnvie *1* para *retirar no local* (${s.pickup_address}) ou mande outro endereço.`);
+      }
       return askConfirm(jid, { ...session.data, delivery });
     }
     case 'confirm': {

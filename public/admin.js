@@ -362,8 +362,9 @@
       </div>
       <div class="card"><h3>Retirada e entrega</h3><p>Aparece no topo do cardápio e no fechamento do pedido.</p>
         <div class="row2">${f('pickup_address', 'Endereço de retirada')}${f('pickup_city', 'Cidade (para o mapa)')}</div>
-        <div class="row2">${f('delivery_per_km', 'Valor por km (R$)', 'inputmode="decimal"')}${f('delivery_round', 'Arredondar para cima de (R$)', 'inputmode="decimal"', 'Ex.: 0,50 → 4,2 km vira R$ 4,50.')}</div>
-        <div class="row2">${f('delivery_min', 'Taxa mínima (R$)', 'inputmode="decimal"', '0 = sem mínimo.')}${f('delivery_max_km', 'Distância máxima (km)', 'inputmode="decimal"', 'Acima disso, taxa "a combinar".')}</div>
+        <div class="row2">${f('delivery_per_km', 'Valor por km adicional (R$)', 'inputmode="decimal"')}${f('delivery_round', 'Arredondar para cima de (R$)', 'inputmode="decimal"', 'Ex.: 0,50 → 4,2 km vira R$ 7,50.')}</div>
+        <div class="row2">${f('delivery_min', 'Taxa mínima (R$)', 'inputmode="decimal"', 'Cobrada até a distância ao lado.')}${f('delivery_base_km', 'Km incluídos na taxa mínima', 'inputmode="decimal"', 'Depois disso, soma o valor por km.')}</div>
+        <div class="row2">${f('delivery_max_km', 'Distância máxima (km)', 'inputmode="decimal"', 'Acima disso não entregamos (só retirada).')}<div></div></div>
         <div class="row2">${f('pickup_lat', 'Latitude da retirada', '', 'Preenchida automaticamente. Pode corrigir se o mapa errar.')}${f('pickup_lng', 'Longitude da retirada')}</div>
         ${f('delivery_note', 'Texto da entrega no cardápio')}
         ${f('location_note', 'Aviso de local', '', 'Usado só se não houver endereço de retirada.')}

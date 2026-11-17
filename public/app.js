@@ -180,6 +180,7 @@
       if (m === 'entrega' && quote) {
         box.hidden = false;
         if (quote.loading) { box.className = 'taxa'; box.innerHTML = '<span>Calculando a taxa de entrega…</span>'; }
+        else if (quote.too_far) { box.className = 'taxa far'; box.innerHTML = `<b>Esse endereço fica a ≈ ${String(quote.km).replace('.', ',')} km — só entregamos até ${String(quote.max_km).replace('.', ',')} km.</b> Escolha a retirada no local ou confira o endereço.`; }
         else if (quote.fee_cents != null) { box.className = 'taxa'; box.innerHTML = `<span>Taxa de entrega${quote.km ? ` · ≈ ${String(quote.km).replace('.', ',')} km` : ''}</span><b class="price">${brl(quote.fee_cents)}</b>`; }
         else { box.className = 'taxa far'; box.innerHTML = '<b>Não conseguimos calcular a distância automaticamente.</b> Sem problema: você paga o pedido pelo Pix agora, e a taxa de entrega é combinada com a equipe no WhatsApp.'; }
       } else box.hidden = true;
@@ -196,7 +197,7 @@
       qTimer = setTimeout(async () => {
         try {
           const r = await fetch('/api/delivery/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: rua, bairro, cep: cepV }) }).then((r) => r.json());
-          if (my === qSeq) { quote = { fee_cents: r.fee_cents ?? null, km: r.km }; paint(); }
+          if (my === qSeq) { quote = { fee_cents: r.fee_cents ?? null, km: r.km, too_far: !!r.too_far, max_km: r.max_km }; paint(); }
         } catch { if (my === qSeq) { quote = { fee_cents: null }; paint(); } }
       }, 700);
     };
@@ -225,6 +226,7 @@
       if (nome.length < 2) { $('#nome').focus(); return; } if (d.length < 10) { $('#tel').focus(); return; }
       if (!m) { $('#eModo').scrollIntoView({ block: 'center' }); return; }
       if (ent && rua.length < 4) { $('#rua').focus(); return; }
+      if (ent && quote && quote.too_far) { $('#taxaBox').scrollIntoView({ block: 'center' }); return; }
       const cepV = ent ? $('#cep').value.trim() : '';
       cliente = { nome, tel: t, obs, modo: m, bairro: ent ? bairro : '', rua: ent ? rua : '', ref: ent ? ref : '', cep: cepV }; store.set('mn_cliente2', cliente);
       const items = Object.entries(bag).map(([k, q]) => ({ product_id: +k, qty: q }));
