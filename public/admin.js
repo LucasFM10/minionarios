@@ -139,7 +139,7 @@
     const t = [];
     if (needsHelp(o)) t.push(`<span class="tag help">🙋 Pediu ajuda</span>`);
     else if (o.chat?.human_status === 'handling') t.push(`<span class="tag" style="background:var(--s2b);color:var(--s2)">💬 Equipe atendendo</span>`);
-    t.push(o.delivery_mode === 'entrega' ? `<span class="tag deliv">🛵 ${esc(o.bairro || 'Entrega')}${o.delivery_fee_cents == null ? ' · taxa a combinar' : ''}</span>` : `<span class="tag">🏠 Retirada</span>`);
+    t.push(o.delivery_mode === 'entrega' ? `<span class="tag deliv">🛵 ${esc(o.bairro || 'Entrega')}${o.delivery_fee_cents == null ? ' · taxa a combinar' : ''}</span>${o.fee_pending ? `<span class="tag" style="background:#FFF1CC;color:#8A5A00">💸 Taxa pendente ${brl(o.delivery_fee_cents)}</span>` : ''}` : `<span class="tag">🏠 Retirada</span>`);
     if (isStale(o)) t.push(`<span class="tag warn">⏰ Sem comprovante há ${ago(o.created_at).replace('há ', '')}</span>`);
     if (o.has_receipt) t.push(`<span class="tag ok">🧾 Comprovante</span>`);
     else if (o.status === 'pedido_feito') t.push(o.source === 'site' && !o.wa_jid ? `<span class="tag bad">Aguardando WhatsApp</span>` : `<span class="tag warn">Sem comprovante</span>`);
@@ -226,9 +226,15 @@
         </dl></div>
         <div class="sec"><h3>Itens</h3><div class="items">
           ${o.items.map((l) => `<div class="r"><span><span class="q">${l.qty}×</span>${esc(l.name)}</span><span>${brl(l.subtotal_cents)}</span></div>`).join('')}
-          ${ent ? `<div class="r"><span>Taxa de entrega</span><span>${o.delivery_fee_cents == null ? 'a combinar' : brl(o.delivery_fee_cents)}</span></div>` : ''}
+          ${ent && !o.fee_extra && o.delivery_fee_cents != null ? `<div class="r"><span>Taxa de entrega</span><span>${brl(o.delivery_fee_cents)}</span></div>` : ''}
           <div class="r t"><span>Total (Pix)</span><span>${brl(o.total_cents)}</span></div>
         </div></div>
+        ${ent && (o.delivery_fee_cents == null || o.fee_extra) ? `<div class="sec"><h3>Taxa de entrega à parte</h3><div class="note" id="feeBox">${
+          o.delivery_fee_cents == null
+            ? `<b>Taxa a combinar</b> — não entrou no Pix do pedido.<div class="actions" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm primary" id="feeCalc">📍 Calcular pela distância</button><input class="inp" id="feeVal" inputmode="decimal" placeholder="ou valor (R$)" style="width:130px" /><button class="btn sm" id="feeSet">Definir</button></div>`
+            : `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>${brl(o.delivery_fee_cents)}</b>${o.delivery_km ? ` · ≈ ${String(o.delivery_km).replace('.', ',')} km` : ''}<br><small class="muted">Não entrou no Pix do pedido — cobrar à parte.</small></span><span class="pill" style="background:${o.fee_paid ? '#DFF5E6;color:#1E7A43' : '#FFF1CC;color:#8A5A00'}">${o.fee_paid ? '✅ Paga' : '⏳ Pendente'}</span></div>
+               <div class="actions" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${o.fee_paid ? `<button class="btn sm" id="feePaid" data-v="0">Desmarcar pagamento</button>` : `<button class="btn sm green" id="feePaid" data-v="1">✓ Marcar taxa como paga</button><button class="btn sm" id="feePix">Copiar Pix da taxa</button><button class="btn sm" id="feeCalc">Recalcular</button>`}</div>`
+        }<p class="err" id="feeErr" hidden></p></div></div>` : ''}
         ${o.notes ? `<div class="sec"><h3>Observação</h3><div class="note">📝 ${esc(o.notes)}</div></div>` : ''}
         <div class="sec"><h3>Comprovante do Pix</h3>${o.receipt_path
           ? `<div class="receipt">${o.receipt_mime === 'application/pdf' ? `<iframe src="${rUrl}"></iframe>` : `<a href="${rUrl}" target="_blank"><img src="${rUrl}" alt="Comprovante" /></a>`}<div class="rf"><span class="muted">Confira valor (${brl(o.total_cents)}), data e recebedor</span><a class="btn sm" href="${rUrl}" target="_blank">Abrir ↗</a></div></div>`
@@ -241,6 +247,21 @@
           : `<button class="btn danger" data-st="cancelado">Cancelar</button>${FLOW[idx + 1] ? `<button class="btn ${o.status === 'pedido_feito' ? 'green' : 'primary'}" data-st="${FLOW[idx + 1]}">${NEXT_LABEL[o.status]} →</button>` : `<button class="btn" disabled>Pedido concluído ✓</button>`}`}
       </div>`;
     $('#drX').onclick = closeDrawer;
+    const feeErr = (m) => { const el = $('#feeErr'); if (el) { el.hidden = !m; el.textContent = m || ''; } };
+    const feeCall = async (url, body) => {
+      try {
+        const r = await api(url, json('POST', body || {}));
+        if (r.too_far) return feeErr(`O endereço fica a ≈ ${String(r.km).replace('.', ',')} km (acima de ${String(r.max_km).replace('.', ',')} km). Defina o valor manualmente se for entregar.`);
+        loadOrders(); openOrder(o.id);
+      } catch (e) { feeErr(e.message); }
+    };
+    const fc = $('#feeCalc'); if (fc) fc.onclick = () => { fc.disabled = true; fc.textContent = 'Calculando…'; feeCall(`/api/admin/orders/${o.id}/fee`).finally(() => { fc.disabled = false; }); };
+    const fs = $('#feeSet'); if (fs) fs.onclick = () => { const v = $('#feeVal').value.trim(); if (!v) return feeErr('Informe o valor.'); feeCall(`/api/admin/orders/${o.id}/fee`, { fee: v }); };
+    const fp = $('#feePaid'); if (fp) fp.onclick = () => feeCall(`/api/admin/orders/${o.id}/fee/paid`, { paid: fp.dataset.v === '1' });
+    const fx = $('#feePix'); if (fx) fx.onclick = async () => {
+      try { const { payload } = await api(`/api/admin/orders/${o.id}/fee/pix`); await navigator.clipboard.writeText(payload); toast('Pix copia e cola da taxa copiado'); }
+      catch (e) { feeErr(e.message); }
+    };
     const dc = $('#drChat'); if (dc) dc.onclick = () => { closeDrawer(); openJid = o.wa_jid; $('[data-tab=chats]').click(); };
     $('#drawer').onclick = (e) => { const b = e.target.closest('[data-st]'); if (b && b.dataset.st !== o.status) setStatus(o.id, b.dataset.st); };
     $('#scrim').hidden = false; requestAnimationFrame(() => { $('#scrim').classList.add('on'); $('#drawer').classList.add('on'); });
@@ -296,7 +317,7 @@
         <div class="kpi"><span>Arrecadado (confirmado)</span><b>${brl(t.confirmed)}</b><small>de ${brl(t.gross)} em pedidos</small></div>
         <div class="kpi"><span>Pedidos ativos</span><b>${act.length}</b><small>ticket médio ${brl(ticket)}</small></div>
         <div class="kpi"><span>Hambúrgueres a produzir</span><b>${burgers}</b><small>${fries} porções de fritas</small></div>
-        <div class="kpi"><span>Entregas</span><b>${ent.length}</b><small>${brl(fees)} em taxas</small></div>
+        <div class="kpi"><span>Entregas</span><b>${ent.length}</b><small>${brl(fees)} em taxas${t.fees_pending ? ` · ${brl(t.fees_pending)} a receber` : ''}</small></div>
       </div>
       <div class="two">
         <div class="card"><h3>Itens vendidos</h3><div class="bars">${prods.length ? prods.map(([n, qn]) => `<div class="b"><span>${esc(n)}</span><div class="track"><div class="fill" style="width:${(qn / max) * 100}%"></div></div><span class="n">${qn}</span></div>`).join('') : '<p class="muted">Sem vendas ainda.</p>'}</div>

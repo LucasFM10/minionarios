@@ -6,6 +6,7 @@ const multer = require('multer');
 const store = require('./db');
 const wa = require('./whatsapp');
 const geo = require('./geo');
+const { buildPixPayload } = require('./pix');
 const imgUrl = (i) => (!i ? null : i.startsWith('/') ? i : '/uploads/' + i);
 
 const PORT = process.env.PORT || 3000;
@@ -106,6 +107,8 @@ const publicOrder = (o, events) => ({
   address_ref: o.address_ref,
   delivery_fee_cents: o.delivery_fee_cents,
   delivery_km: o.delivery_km,
+  fee_extra: o.fee_extra,
+  fee_paid: o.fee_paid,
   status: o.status,
   status_info: o.status_info,
   has_receipt: o.has_receipt,
@@ -247,6 +250,37 @@ app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// Taxa de pedidos que ficaram "a combinar": calcula pela distância (ou valor manual) e controla o pagamento à parte.
+app.post('/api/admin/orders/:id/fee', requireAdmin, async (req, res) => {
+  try {
+    const o = store.getOrderById(req.params.id);
+    if (!o || o.delivery_mode !== 'entrega') return res.status(400).json({ error: 'Pedido sem entrega.' });
+    if (o.delivery_fee_cents != null && !o.fee_extra) return res.status(400).json({ error: 'A taxa deste pedido já foi paga junto com o pedido.' });
+    if (req.body.fee != null && req.body.fee !== '') {
+      const cents = Math.round(parseFloat(String(req.body.fee).replace(',', '.')) * 100);
+      if (!Number.isFinite(cents) || cents < 0 || cents > 100000) return res.status(400).json({ error: 'Valor inválido.' });
+      return res.json({ order: store.setLateFee(o.id, cents, null) });
+    }
+    const d = await geo.priceDelivery({ address: o.address, bairro: o.bairro });
+    if (d.too_far) return res.json({ order: o, too_far: true, km: d.km, max_km: d.max_km });
+    if (d.fee_cents == null) return res.status(400).json({ error: 'Não consegui localizar o endereço no mapa. Informe o valor manualmente.' });
+    res.json({ order: store.setLateFee(o.id, d.fee_cents, d.km) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.post('/api/admin/orders/:id/fee/paid', requireAdmin, (req, res) => {
+  const o = store.getOrderById(req.params.id);
+  if (!o || !o.fee_extra) return res.status(400).json({ error: 'Este pedido não tem taxa à parte.' });
+  res.json({ order: store.setFeePaid(o.id, !!req.body.paid) });
+});
+app.get('/api/admin/orders/:id/fee/pix', requireAdmin, (req, res) => {
+  const o = store.getOrderById(req.params.id);
+  if (!o || !o.fee_extra || !(o.delivery_fee_cents > 0)) return res.status(400).json({ error: 'Sem taxa a cobrar.' });
+  const s = store.getSettings();
+  res.json({ payload: buildPixPayload({ key: s.pix_key, name: s.pix_name, city: s.pix_city, amountCents: o.delivery_fee_cents, txid: 'MIN' + o.number_label + 'TX' }) });
 });
 
 app.get('/api/admin/orders/:id/receipt', requireAdmin, (req, res) => {
@@ -443,10 +477,23 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Arquivo muito grande (máx. 10 MB).' : 'Erro interno.' });
 });
 
+// Ao iniciar, tenta calcular a taxa dos pedidos de entrega que ficaram "a combinar" (um por vez; o mapa limita a 1/s).
+async function backfillFees() {
+  for (const id of store.ordersWithoutFee()) {
+    try {
+      const o = store.getOrderById(id);
+      const d = await geo.priceDelivery({ address: o.address, bairro: o.bairro });
+      if (d.fee_cents != null) { store.setLateFee(id, d.fee_cents, d.km); console.log(`[taxa] pedido #${o.number_label}: ${d.km} km → ${d.fee_cents}`); }
+      else if (d.too_far) console.log(`[taxa] pedido #${o.number_label}: ${d.km} km, fora da área`);
+    } catch (e) { console.error('[taxa]', e.message); }
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`Minionários rodando na porta ${PORT}`);
   // Com EVOLUTION_AUTO_SETUP=true, cria a instância e registra o webhook (só falta ler o QR no celular).
   // Sem isso, o app não mexe na Evolution: só envia mensagens pela instância de EVOLUTION_INSTANCE.
+  backfillFees();
   if (wa.isConfigured() && wa.cfg().publicUrl && wa.cfg().manage) {
     wa.setupInstance()
       .then((st) => console.log('[wa] instância pronta:', st.state))

@@ -145,7 +145,7 @@ for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 const productCols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
 if (!productCols.includes('featured')) db.exec('ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0');
 const orderCols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
-for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER'], ['delivery_km', 'REAL']]) {
+for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER'], ['delivery_km', 'REAL'], ['fee_extra', 'INTEGER NOT NULL DEFAULT 0'], ['fee_paid', 'INTEGER NOT NULL DEFAULT 0']]) {
   if (!orderCols.includes(c)) db.exec(`ALTER TABLE orders ADD COLUMN ${c} ${def}`);
 }
 if (!productCols.includes('badge')) db.exec("ALTER TABLE products ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
@@ -242,7 +242,26 @@ function hydrateOrder(o) {
     items: JSON.parse(o.items_json),
     status_info: statusInfo(o.status),
     has_receipt: !!o.receipt_path,
+    // Taxa definida depois do pedido (era "a combinar"): não está no total pago, é cobrada à parte.
+    fee_extra: !!o.fee_extra,
+    fee_paid: !!o.fee_paid,
+    fee_pending: !!o.fee_extra && !o.fee_paid && o.delivery_fee_cents > 0,
   };
+}
+
+/** Pedidos de entrega ainda com taxa "a combinar". */
+const ordersWithoutFee = () =>
+  db.prepare("SELECT id FROM orders WHERE delivery_mode = 'entrega' AND delivery_fee_cents IS NULL AND status != 'cancelado' ORDER BY id").all().map((r) => r.id);
+
+/** Define a taxa de um pedido que estava "a combinar" (cobrada à parte do Pix original). */
+function setLateFee(id, feeCents, km) {
+  db.prepare(`UPDATE orders SET delivery_fee_cents = ?, delivery_km = COALESCE(?, delivery_km), fee_extra = 1, fee_paid = 0,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`).run(feeCents, km ?? null, id);
+  return getOrderById(id);
+}
+function setFeePaid(id, paid) {
+  db.prepare("UPDATE orders SET fee_paid = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND fee_extra = 1").run(paid ? 1 : 0, id);
+  return getOrderById(id);
 }
 
 /**
@@ -395,7 +414,9 @@ function stats() {
     .prepare(
       `SELECT COUNT(*) AS orders,
               COALESCE(SUM(total_cents),0) AS gross,
-              COALESCE(SUM(CASE WHEN status NOT IN ('pedido_feito','cancelado') THEN total_cents END),0) AS confirmed
+              COALESCE(SUM(CASE WHEN status NOT IN ('pedido_feito','cancelado') THEN total_cents END),0)
+                + COALESCE(SUM(CASE WHEN fee_extra = 1 AND fee_paid = 1 THEN delivery_fee_cents END),0) AS confirmed,
+              COALESCE(SUM(CASE WHEN fee_extra = 1 AND fee_paid = 0 THEN delivery_fee_cents END),0) AS fees_pending
        FROM orders WHERE status != 'cancelado'`
     )
     .get();
@@ -476,6 +497,9 @@ const markChatRead = (jid) => db.prepare('UPDATE wa_chats SET unread = 0 WHERE j
 const chatStates = () => Object.fromEntries(db.prepare('SELECT jid, human_status, unread FROM wa_chats').all().map((c) => [c.jid, c]));
 
 module.exports = {
+  ordersWithoutFee,
+  setLateFee,
+  setFeePaid,
   getChat, logMessage, messageSeen, setHuman, touchHuman, botPaused, listChats, chatMessages, markChatRead, chatStates,
   db,
   DATA_DIR,

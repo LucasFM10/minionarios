@@ -54,7 +54,10 @@
           <input type="file" id="rc" accept="image/*,application/pdf" /></label>` : ''}
         <div class="card">
           ${o.items.map((l) => `<div class="line"><div class="nm">${l.qty}x ${esc(l.name)}</div><b>${brl(l.subtotal_cents)}</b></div>`).join('')}
+          ${o.delivery_mode === 'entrega' && !o.fee_extra && o.delivery_fee_cents != null ? `<div class="line"><div class="nm">Taxa de entrega</div><b>${brl(o.delivery_fee_cents)}</b></div>` : ''}
           <div class="total"><span>Total (Pix)</span><span>${brl(o.total_cents)}</span></div>
+          ${o.delivery_mode === 'entrega' && o.delivery_fee_cents == null ? `<p class="small muted" style="margin:8px 0 0">🛵 Taxa de entrega: a combinar com a equipe.</p>` : ''}
+          ${o.fee_extra ? `<div class="line" style="margin-top:8px"><div class="nm">🛵 Taxa de entrega${o.delivery_km ? ` (≈ ${String(o.delivery_km).replace('.', ',')} km)` : ''}<br><small class="muted">${o.fee_paid ? 'Paga ✅' : 'Pagar à parte — a equipe combina com você'}</small></div><b>${brl(o.delivery_fee_cents)}</b></div>` : ''}
         </div>
         <p class="small muted center">Esta página atualiza sozinha. Feito em ${fmtTime(o.created_at)}.</p>`;
     }

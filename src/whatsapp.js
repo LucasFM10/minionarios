@@ -209,14 +209,17 @@ function statusText(orders) {
         (o) =>
           `*Pedido #${o.number_label}* — ${brl(o.total_cents)}\n${o.items.map((l) => `${l.qty}x ${l.name}`).join(', ')}\nStatus: ${o.status_info.emoji} *${o.status_info.label}*${
             o.has_receipt ? '' : o.status === 'pedido_feito' ? '\n⚠️ Ainda sem comprovante. Envie a foto do comprovante aqui.' : ''
-          }\nAcompanhe: ${siteUrl('/pedido?c=' + o.code)}`
+          }${o.delivery_mode === 'entrega' && (o.fee_extra || o.delivery_fee_cents == null) ? `\n🛵 Taxa de entrega: ${feeTxt(o)}` : ''}\nAcompanhe: ${siteUrl('/pedido?c=' + o.code)}`
       )
       .join('\n\n')
   );
 }
 
 const kmTxt = (km) => (km ? ` (≈ ${String(km).replace('.', ',')} km)` : '');
-const feeTxt = (o) => (o.delivery_fee_cents == null ? 'a combinar com a equipe' : brl(o.delivery_fee_cents) + kmTxt(o.delivery_km));
+const feeTxt = (o) =>
+  o.delivery_fee_cents == null
+    ? 'a combinar com a equipe'
+    : brl(o.delivery_fee_cents) + kmTxt(o.delivery_km) + (o.fee_extra ? (o.fee_paid ? ' — paga ✅' : ' — *pagar à parte* (a equipe combina com você)') : '');
 const deliveryLine = (o) => `🛵 Entrega${o.bairro ? ' · ' + o.bairro : ''} — ${o.address}${o.address_ref ? ` (${o.address_ref})` : ''}\n      Taxa: ${feeTxt(o)}`;
 
 const OPTIONS_TEXT = `*O que você pode fazer por aqui:*\n*2* — Acompanhar o status do pedido\n*pix* — Receber o código Pix de novo\n*4* — Falar com a equipe\n*menu* — Ver todas as opções`;

@@ -189,3 +189,28 @@ test('um único Pix para vários pedidos: "dos dois" anexa o comprovante a todos
   await inbound('', img);
   assert.match(last(), /não encontrei um pedido aguardando comprovante/);
 });
+
+test('taxa "a combinar" calculada depois: fica à parte, aparece no status e pode ser marcada como paga', async () => {
+  // endereço que o mapa não acha → pedido nasce "a combinar"
+  const o = store.createOrder({ customer_name: 'Ana', phone: '83991112222', items: [{ product_id: 1, qty: 1 }], source: 'site',
+    delivery: await geo.priceDelivery({ address: 'Rua Que Nao Existe, 5', bairro: 'Lugar Nenhum' }) });
+  assert.strictEqual(o.delivery_fee_cents, null);
+  const totalPago = o.total_cents;
+  assert.ok(store.ordersWithoutFee().includes(o.id));
+  // depois a equipe/servidor calcula a taxa
+  const d = await geo.priceDelivery({ address: 'Rua Golfo de Lion, 120', bairro: 'Manaíra' });
+  let x = store.setLateFee(o.id, d.fee_cents, d.km);
+  assert.strictEqual(x.delivery_fee_cents, 750);
+  assert.strictEqual(x.total_cents, totalPago, 'o total do Pix original não muda');
+  assert.ok(x.fee_extra && x.fee_pending && !x.fee_paid);
+  assert.ok(!store.ordersWithoutFee().includes(o.id));
+  assert.strictEqual(store.stats().totals.fees_pending >= 750, true);
+  // cliente pede status
+  store.setHuman(JID, 'none'); store.saveSession(JID, 'main', {});
+  await inbound('status');
+  assert.match(last(), /Taxa de entrega: R\$ 7,50 \(≈ 4,2 km\) — \*pagar à parte\*/);
+  x = store.setFeePaid(o.id, true);
+  assert.ok(x.fee_paid && !x.fee_pending);
+  await inbound('status');
+  assert.match(last(), /Taxa de entrega: R\$ 7,50 \(≈ 4,2 km\) — paga ✅/);
+});
