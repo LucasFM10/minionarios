@@ -391,7 +391,7 @@
     $('#settingsForm').innerHTML = `
       <div class="card"><h3>Vendas</h3><p>Controle da pré-venda e do atendimento.</p>
         ${sw('accepting_orders', 'Pré-venda aberta', 'Quando desligado, o cardápio fica só para consulta.')}
-        ${sw('delivery_enabled', 'Oferecer entrega', 'Mostra a opção "Receber em casa" com taxa por bairro.')}
+        ${sw('delivery_enabled', 'Oferecer entrega', 'Mostra a opção "Receber em casa" com taxa pela distância.')}
         <div style="margin-top:12px">${f('next_order_number', 'Próximo número de pedido', 'type="number" min="1" max="999"')}</div>
       </div>
       <div class="card"><h3>Pix</h3><p>Dados usados para gerar o QR Code e o copia e cola.</p>
@@ -406,6 +406,13 @@
         <div class="row2">${f('pickup_lat', 'Latitude da retirada', '', 'Preenchida automaticamente. Pode corrigir se o mapa errar.')}${f('pickup_lng', 'Longitude da retirada')}</div>
         ${f('delivery_note', 'Texto da entrega no cardápio')}
         ${f('location_note', 'Aviso de local', '', 'Usado só se não houver endereço de retirada.')}
+        ${s.pickup_lat ? `<p style="margin:4px 0 0;font-size:13px">📍 Ponto de retirada no mapa: <a href="https://www.google.com/maps?q=${esc(s.pickup_lat)},${esc(s.pickup_lng)}" target="_blank" rel="noopener">conferir no Google Maps ↗</a></p>` : ''}
+      </div>
+      <div class="card"><h3>Testar cálculo da entrega</h3><p>Simula um endereço de cliente e mostra a distância, a taxa e cada busca feita no mapa.</p>
+        <div class="row2"><label class="fld"><span>Rua e número</span><input class="inp" id="tRua" placeholder="Av. Gov. Argemiro de Figueiredo, 125" /></label><label class="fld"><span>Bairro</span><input class="inp" id="tBairro" placeholder="Jardim Oceania" /></label></div>
+        <div class="row2"><label class="fld"><span>CEP (opcional)</span><input class="inp" id="tCep" inputmode="numeric" /></label><label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:22px"><input type="checkbox" id="tReset" /><span style="margin:0">Localizar de novo o ponto de retirada</span></label></div>
+        <button type="button" class="btn" id="tGo">Testar</button>
+        <div id="tOut" style="margin-top:12px"></div>
       </div>
       <div class="card"><h3>Página</h3><p>Identidade da equipe no cardápio.</p>
         <div class="row2">${f('team_name', 'Nome da equipe')}${f('instagram', 'Instagram (sem @)')}</div>
@@ -417,6 +424,18 @@
       </div>
       <div class="save-bar"><button class="btn primary" style="height:44px;padding:0 22px">Salvar ajustes</button></div>`;
   }
+  $('#settingsForm').addEventListener('click', async (e) => {
+    if (e.target.id !== 'tGo') return;
+    const b = e.target; b.disabled = true; b.textContent = 'Calculando…'; $('#tOut').innerHTML = '';
+    try {
+      const r = await api('/api/admin/delivery/test', json('POST', { address: $('#tRua').value, bairro: $('#tBairro').value, cep: $('#tCep').value, reset_origin: $('#tReset').checked }));
+      const km = (v) => String(v).replace('.', ',');
+      const head = r.fee_cents != null ? `✅ <b>${brl(r.fee_cents)}</b> · ≈ ${km(r.km)} km${r.precision === 'bairro' ? ' (aproximado pelo centro do bairro)' : r.precision === 'cep' ? ' (pelo CEP)' : ''}${r.approx && r.precision !== 'bairro' ? ' (sem rota, linha reta + 30%)' : ''}`
+        : r.too_far ? `🚫 ≈ ${km(r.km)} km — fora da área de entrega` : '❌ Não foi possível calcular';
+      $('#tOut').innerHTML = `<div class="note"><div>${head}</div>${r.origin ? `<small>Retirada: <a href="https://www.google.com/maps?q=${r.origin.lat},${r.origin.lng}" target="_blank" rel="noopener">${esc(r.origin.lat)}, ${esc(r.origin.lng)} ↗</a></small>` : '<small style="color:var(--s6)">Ponto de retirada não localizado — preencha latitude/longitude acima.</small>'}<pre style="white-space:pre-wrap;font-size:12px;margin:8px 0 0">${esc(r.trace.join('\n'))}</pre></div>`;
+    } catch (err) { $('#tOut').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+    b.disabled = false; b.textContent = 'Testar';
+  });
   $('#settingsForm').onsubmit = async (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
     $$('[data-bool]', e.target).forEach((c) => fd.set(c.dataset.bool, c.checked ? '1' : '0'));

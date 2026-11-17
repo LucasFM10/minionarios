@@ -182,7 +182,7 @@
         if (quote.loading) { box.className = 'taxa'; box.innerHTML = '<span>Calculando a taxa de entrega…</span>'; }
         else if (quote.too_far) { box.className = 'taxa far'; box.innerHTML = `<b>Esse endereço fica a ≈ ${String(quote.km).replace('.', ',')} km — só entregamos até ${String(quote.max_km).replace('.', ',')} km.</b> Escolha a retirada no local ou confira o endereço.`; }
         else if (quote.fee_cents != null) { box.className = 'taxa'; box.innerHTML = `<span>Taxa de entrega${quote.km ? ` · ≈ ${String(quote.km).replace('.', ',')} km` : ''}</span><b class="price">${brl(quote.fee_cents)}</b>`; }
-        else { box.className = 'taxa far'; box.innerHTML = '<b>Não conseguimos calcular a distância automaticamente.</b> Sem problema: você paga o pedido pelo Pix agora, e a taxa de entrega é combinada com a equipe no WhatsApp.'; }
+        else { box.className = 'taxa far'; box.innerHTML = '<b>Não encontramos esse endereço no mapa.</b> Confira a rua e o bairro (ou informe o CEP). Se continuar assim, pode seguir: a taxa de entrega é combinada com a equipe no WhatsApp.'; }
       } else box.hidden = true;
       const t = taxaAtual();
       $('#nextT').textContent = brl(bagTotal() + (typeof t === 'number' ? t : 0));

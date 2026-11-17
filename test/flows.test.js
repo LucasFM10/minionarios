@@ -13,6 +13,7 @@ const wa = require('../src/whatsapp');
 const sent = [];
 let msgSeq = 0;
 let routeMeters = 4210;
+let nominatimDown = false;
 global.fetch = async (url, opts = {}) => {
   const u = String(url);
   const json = (b, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => b, text: async () => JSON.stringify(b) });
@@ -22,11 +23,20 @@ global.fetch = async (url, opts = {}) => {
     return json({ key: { id: 'BOT' + ++msgSeq } });
   }
   if (u.startsWith('https://nominatim.openstreetmap.org')) {
-    const q = decodeURIComponent(u.split('q=')[1]);
+    if (nominatimDown) return json({}, false);
+    const q = decodeURIComponent(u.split('&q=')[1]);
     if (/marieta/i.test(q)) return json([{ lat: '-7.1000', lon: '-34.8300' }]); // retirada
     if (/golfo/i.test(q)) return json([{ lat: '-7.1300', lon: '-34.8300' }]); // ~3,3 km ao sul
     return json([]);
   }
+  if (u.startsWith('https://photon.komoot.io')) {
+    const q = decodeURIComponent(u.split('&q=')[1]);
+    if (/oceania/i.test(q) && !/argemiro/i.test(q)) return json({ features: [{ geometry: { coordinates: [-34.8250, -7.0950] } }] }); // centro do bairro
+    if (/golfo/i.test(q)) return json({ features: [{ geometry: { coordinates: [-34.83, -7.13] } }] });
+    if (/marieta/i.test(q)) return json({ features: [{ geometry: { coordinates: [-34.83, -7.10] } }] });
+    return json({ features: [] });
+  }
+  if (u.startsWith('https://cep.awesomeapi.com.br')) return json({ status: 404 }, false);
   if (u.startsWith('https://router.project-osrm.org')) return json({ routes: [{ distance: routeMeters }] });
   if (u.startsWith('https://brasilapi.com.br')) return json({});
   throw new Error('rede inesperada: ' + u);
@@ -228,4 +238,23 @@ test('excluir pedido: some de vez (histórico e comprovante juntos) e o número 
   const n = store.createOrder({ customer_name: 'Depois', phone: '83990000000', items: [{ product_id: 1, qty: 1 }], source: 'admin' });
   assert.ok(n.number > o.number);
   assert.strictEqual(store.deleteOrder(999999), null);
+});
+
+test('mapa robusto: Nominatim fora do ar → Photon; rua não achada → centro do bairro; endereço de retirada abreviado', async () => {
+  const sp = geo.splitAddress('R. Marieta Steimbach Silva, 51 – Miramar');
+  assert.deepStrictEqual(sp, { street: 'Rua Marieta Steimbach Silva, 51', bairro: 'Miramar' });
+  nominatimDown = true;
+  store.db.prepare('DELETE FROM geo_cache').run();
+  store.setSetting('pickup_lat', ''); store.setSetting('pickup_lng', '');
+  const trace = [];
+  const ok = await geo.priceDelivery({ address: 'Rua Golfo de Lion, 300', bairro: 'Manaíra' }, trace);
+  assert.strictEqual(ok.fee_cents, 750, trace.join('\n'));
+  assert.ok(trace.some((t) => /photon ok/.test(t)));
+  assert.ok(store.getSettings().pickup_lat, 'ponto de retirada salvo');
+  // rua desconhecida, mas o bairro existe → calcula pelo centro do bairro
+  const t2 = [];
+  const b = await geo.priceDelivery({ address: 'Avenida Governador Argemiro de Figueiredo, 125', bairro: 'Jardim Oceania' }, t2);
+  assert.ok(b.fee_cents != null, t2.join('\n'));
+  assert.strictEqual(b.precision, 'bairro');
+  nominatimDown = false;
 });

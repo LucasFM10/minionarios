@@ -252,6 +252,16 @@ app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
   }
 });
 
+// Teste do cálculo de distância (Ajustes): mostra o passo a passo das buscas no mapa.
+app.post('/api/admin/delivery/test', requireAdmin, async (req, res) => {
+  const trace = [];
+  const s = store.getSettings();
+  if (req.body.reset_origin) { store.setSetting('pickup_lat', ''); store.setSetting('pickup_lng', ''); }
+  const d = await geo.priceDelivery({ address: req.body.address, bairro: req.body.bairro, cep: req.body.cep }, trace);
+  const s2 = store.getSettings();
+  res.json({ km: d.km, fee_cents: d.fee_cents, too_far: !!d.too_far, approx: d.approx, precision: d.precision || null, origin: s2.pickup_lat ? { lat: s2.pickup_lat, lng: s2.pickup_lng } : null, pickup_address: s.pickup_address, trace });
+});
+
 app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
   const o = store.deleteOrder(req.params.id);
   if (!o) return res.status(404).json({ error: 'Não encontrado' });
