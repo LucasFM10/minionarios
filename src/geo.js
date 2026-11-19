@@ -207,6 +207,8 @@ async function priceDelivery(d, trace = []) {
     return base;
   }
   base.precision = dest.precision;
+  base.lat = dest.lat;
+  base.lng = dest.lng;
   const { km, approx } = await roadKm(origin, dest, trace);
   const num = (v, d) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : d; };
   const maxKm = num(s.delivery_max_km, 9);
@@ -218,4 +220,10 @@ async function priceDelivery(d, trace = []) {
   return base;
 }
 
-module.exports = { viaCep, viaCepSearch, priceDelivery, feeFor, haversineKm, setFetch, geocodeAddress, getOrigin, splitAddress };
+/** Localiza o endereço de um pedido já salvo (para o mapa de entregas). */
+async function locateOrder(o) {
+  const cep = (String(o.address || '').match(/CEP\s*(\d{5}-?\d{3})/i) || [])[1] || '';
+  return geocodeAddress({ address: o.address, bairro: o.bairro, cep }, store.getSettings());
+}
+
+module.exports = { locateOrder, viaCep, viaCepSearch, priceDelivery, feeFor, haversineKm, setFetch, geocodeAddress, getOrigin, splitAddress };

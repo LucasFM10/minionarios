@@ -57,7 +57,7 @@
     const b = e.target.closest('button'); if (!b) return;
     $$('#nav button').forEach((x) => x.classList.toggle('on', x === b));
     $$('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
-    ({ orders: loadOrders, chats: loadChats, summary: loadSummary, products: loadProducts, settings: loadSettings, whatsapp: loadWa })[b.dataset.tab]();
+    ({ orders: loadOrders, chats: loadChats, map: loadMap, summary: loadSummary, products: loadProducts, settings: loadSettings, whatsapp: loadWa })[b.dataset.tab]();
     scrollTo(0, 0);
   };
 
@@ -316,6 +316,113 @@
         $('#modal').close(); toast(`Pedido #${order.number_label} criado`); knownIds?.add(order.id); loadOrders();
       } catch (err) { $('#moErr').textContent = err.message; }
     };
+  };
+
+  /* ---------- mapa de entregas ---------- */
+  let LMap = null, mapLayer = null, mapData = null, mapMarkers = {}, mapSel = new Set(), locatingNow = false;
+  const PREC = { manual: ['ok', '📍 Ponto exato'], rua: ['approx', '≈ Aproximado (rua)'], cep: ['approx', '≈ Aproximado (CEP)'], bairro: ['approx', '≈ Aproximado (bairro)'] };
+  const loadLeaflet = () => window.L ? Promise.resolve() : new Promise((ok, fail) => {
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(css);
+    const js = document.createElement('script'); js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'; js.onload = ok; js.onerror = () => fail(new Error('Não foi possível carregar o mapa.')); document.head.appendChild(js);
+  });
+  const hav = (a, b) => { const R = 6371, r = (x) => (x * Math.PI) / 180, dLat = r(b.lat - a.lat), dLng = r(b.lng - a.lng); const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+  /** "-7.1234, -34.8234", "-7,1234 -34,8234" ou link do Google Maps (…@-7.12,-34.82…) → {lat,lng} */
+  function parseLatLng(v) {
+    const t = String(v || '').trim();
+    let m = t.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || t.match(/(-?\d+\.\d+)\s*[,;\s]\s*(-?\d+\.\d+)/) || t.match(/(-?\d+,\d+)\s*[;\s]\s*(-?\d+,\d+)/);
+    if (!m) return null;
+    const lat = parseFloat(m[1].replace(',', '.')), lng = parseFloat(m[2].replace(',', '.'));
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+  }
+  const mapOrders = () => (mapData?.orders || []).filter((o) => $('#mapFilter').value === 'all' || o.status !== 'concluido');
+  async function loadMap() {
+    try { await loadLeaflet(); } catch (e) { $('#mapList').innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+    try { mapData = await api('/api/admin/map'); } catch (e) { return toast(e.message); }
+    if (!LMap) {
+      LMap = L.map('map', { zoomControl: true }).setView(mapData.pickup ? [mapData.pickup.lat, mapData.pickup.lng] : [-7.115, -34.84], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(LMap);
+      mapLayer = L.layerGroup().addTo(LMap);
+    }
+    setTimeout(() => LMap.invalidateSize(), 50);
+    drawMap(true);
+    if (mapData.missing && !locatingNow) locateMissing();
+  }
+  async function locateMissing() {
+    locatingNow = true; $('#mapInfo').textContent = `Localizando ${mapData.missing} endereço(s) no mapa…`;
+    try {
+      for (let i = 0; i < 10; i++) {
+        const r = await api('/api/admin/map/locate', { method: 'POST' });
+        if (r.busy) { await new Promise((ok) => setTimeout(ok, 3000)); continue; }
+        if (!r.located || !r.missing) break;
+      }
+      mapData = await api('/api/admin/map'); drawMap(false);
+    } catch (e) { toast(e.message); }
+    locatingNow = false;
+  }
+  function drawMap(fit) {
+    mapLayer.clearLayers(); mapMarkers = {};
+    const list = mapOrders(), pts = [];
+    if (mapData.pickup) {
+      L.marker([mapData.pickup.lat, mapData.pickup.lng], { icon: L.divIcon({ className: '', html: '<div class="pin home">🏠</div>', iconSize: [34, 34], iconAnchor: [17, 17] }), zIndexOffset: 1000 })
+        .bindPopup(`<b>Retirada / saída</b><br>${esc(mapData.pickup.address || '')}`).addTo(mapLayer);
+      pts.push([mapData.pickup.lat, mapData.pickup.lng]);
+    }
+    for (const o of list) {
+      if (o.lat == null) continue;
+      const [cls] = PREC[o.precision] || PREC.rua;
+      const mk = L.marker([o.lat, o.lng], { draggable: true, icon: L.divIcon({ className: '', html: `<div class="pin ${cls}${mapSel.has(o.id) ? ' sel' : ''}">${o.number_label}</div>`, iconSize: [40, 26], iconAnchor: [20, 26] }) })
+        .bindPopup(`<b>#${o.number_label} · ${esc(o.customer_name)}</b><br>${esc(o.address)}${o.address_ref ? `<br><i>${esc(o.address_ref)}</i>` : ''}<br><small>${esc(o.status_info.label)} · ${esc(o.items)}</small><br><small>${(PREC[o.precision] || PREC.rua)[1]} — arraste o pino para corrigir</small>`)
+        .addTo(mapLayer);
+      mk.on('dragend', async () => {
+        const p = mk.getLatLng();
+        if (!confirm(`Salvar este ponto como o endereço exato do pedido #${o.number_label}?`)) { mk.setLatLng([o.lat, o.lng]); return; }
+        await saveGeo(o.id, { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }, () => mk.setLatLng([o.lat, o.lng]));
+      });
+      mapMarkers[o.id] = mk; pts.push([o.lat, o.lng]);
+    }
+    if (fit && pts.length > 1) LMap.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
+    const approx = list.filter((o) => o.lat != null && o.precision !== 'manual').length, none = list.filter((o) => o.lat == null).length;
+    $('#mapInfo').textContent = `${list.length} entrega(s)` + (approx ? ` · ${approx} com ponto aproximado` : '') + (none ? ` · ${none} sem ponto` : '');
+    $('#mapList').innerHTML = list.length ? `<p class="muted map-tip">Marque as entregas da viagem e toque em <b>Abrir rota</b>. Para corrigir um ponto: arraste o pino no mapa, ou cole a latitude/longitude (no Google Maps, segure o dedo no local exato e copie os números).</p>` + list.map((o) => {
+      const [cls, lab] = o.lat == null ? ['none', 'Sem ponto no mapa'] : PREC[o.precision] || PREC.rua;
+      return `<div class="mrow" data-mid="${o.id}">
+        <label class="mchk"><input type="checkbox" data-sel="${o.id}" ${mapSel.has(o.id) ? 'checked' : ''} ${o.lat == null ? 'disabled' : ''} /></label>
+        <div class="mbody">
+          <div class="mtop"><b>#${o.number_label} · ${esc(o.customer_name)}</b><span class="pill st-${o.status}">${esc(o.status_info.label)}</span></div>
+          <div class="maddr">${esc(o.address)}${o.address_ref ? ` <span class="muted">· ${esc(o.address_ref)}</span>` : ''}</div>
+          <div class="mmeta"><span class="prec ${cls}">${lab}</span>${o.lat != null ? `<button type="button" class="linkb" data-focus="${o.id}">ver no mapa</button>` : ''}<a class="linkb" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(o.address.replace(/\s*—\s*CEP.*$/, '') + ', ' + (o.bairro || '') + ', João Pessoa - PB')}">procurar no Google Maps ↗</a></div>
+          <div class="mgeo"><input class="inp" data-ll="${o.id}" placeholder="-7.123456, -34.812345" value="${o.precision === 'manual' ? `${o.lat}, ${o.lng}` : ''}" /><button type="button" class="btn sm" data-save="${o.id}">Salvar ponto</button>${o.precision === 'manual' ? `<button type="button" class="btn sm" data-reset="${o.id}" title="Voltar ao ponto automático">↺</button>` : ''}</div>
+        </div></div>`;
+    }).join('') : '<div class="empty">Nenhum pedido de entrega por enquanto.</div>';
+  }
+  async function saveGeo(id, body, onFail) {
+    try { await api(`/api/admin/orders/${id}/geo`, json('PATCH', body)); toast('Ponto salvo ✓'); mapData = await api('/api/admin/map'); drawMap(false); }
+    catch (e) { toast(e.message); if (onFail) onFail(); }
+  }
+  $('#mapFilter').onchange = () => drawMap(true);
+  $('#mapList').onclick = (e) => {
+    const f = e.target.closest('[data-focus]'); if (f) { const mk = mapMarkers[f.dataset.focus]; if (mk) { LMap.setView(mk.getLatLng(), 17); mk.openPopup(); $('#map').scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
+    const sv = e.target.closest('[data-save]');
+    if (sv) { const id = +sv.dataset.save, p = parseLatLng($(`[data-ll="${id}"]`).value); if (!p) return toast('Cole a latitude e a longitude, ex.: -7.123456, -34.812345'); return saveGeo(id, p); }
+    const rs = e.target.closest('[data-reset]'); if (rs && confirm('Voltar para o ponto aproximado automático?')) return saveGeo(+rs.dataset.reset, { reset: true });
+  };
+  $('#mapList').onchange = (e) => {
+    const c = e.target.closest('[data-sel]'); if (!c) return;
+    const id = +c.dataset.sel; c.checked ? mapSel.add(id) : mapSel.delete(id); drawMap(false);
+  };
+  $('#mapRoute').onclick = () => {
+    const all = mapOrders().filter((o) => o.lat != null);
+    let stops = mapSel.size ? all.filter((o) => mapSel.has(o.id)) : all;
+    if (!stops.length) return toast('Nenhuma entrega com ponto no mapa.');
+    if (stops.length > 10) return toast(`Selecione até 10 entregas por viagem (há ${stops.length}). Marque as caixinhas na lista.`);
+    // ordem sugerida: sempre a entrega mais próxima da anterior, saindo do ponto de retirada
+    let cur = mapData.pickup || stops[0]; const order = []; const left = [...stops];
+    while (left.length) { left.sort((a, b) => hav(cur, a) - hav(cur, b)); cur = left.shift(); order.push(cur); }
+    const ll = (p) => `${p.lat},${p.lng}`;
+    const dest = order[order.length - 1], way = order.slice(0, -1);
+    const url = `https://www.google.com/maps/dir/?api=1&travelmode=driving${mapData.pickup ? `&origin=${ll(mapData.pickup)}` : ''}&destination=${ll(dest)}${way.length ? `&waypoints=${encodeURIComponent(way.map(ll).join('|'))}` : ''}`;
+    toast('Ordem sugerida: ' + order.map((o) => '#' + o.number_label).join(' → '));
+    window.open(url, '_blank', 'noopener');
   };
 
   /* ---------- resumo ---------- */

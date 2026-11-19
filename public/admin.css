@@ -341,3 +341,27 @@ dialog::backdrop { background: rgba(23,21,15,.45); }
 .mobile-logout { display: none !important; }
 
 .lrow .mst { display: none !important; }
+
+/* ---------- mapa de entregas ---------- */
+.map-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mapwrap { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; align-items: start; }
+#map { height: calc(100vh - 170px); min-height: 420px; border-radius: 14px; border: 1px solid var(--line); z-index: 0; }
+#mapList { max-height: calc(100vh - 170px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.map-tip { font-size: 13px; margin: 0 0 4px; }
+.mrow { display: flex; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.mchk { padding-top: 2px; } .mchk input { width: 18px; height: 18px; }
+.mbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mtop { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.maddr { font-size: 13.5px; }
+.mmeta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+.linkb { background: none; border: 0; padding: 0; font: inherit; color: #2E6BD6; text-decoration: underline; cursor: pointer; }
+.prec { font-weight: 700; } .prec.ok { color: #1E7A43; } .prec.approx { color: #A86400; } .prec.none { color: var(--s6, #B4441C); }
+.mgeo { display: flex; gap: 6px; } .mgeo .inp { flex: 1; min-width: 0; height: 34px; font-size: 13px; }
+.pin { display: grid; place-items: center; min-width: 40px; height: 26px; padding: 0 6px; border-radius: 8px; font: 700 12px/1 system-ui, sans-serif; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3); border: 2px solid #fff; }
+.pin.ok { background: #1E8E4E; } .pin.approx { background: #E08A00; } .pin.sel { outline: 3px solid #2E6BD6; }
+.pin.home { width: 34px; min-width: 34px; height: 34px; border-radius: 50%; background: #17150F; font-size: 16px; }
+@media (max-width: 860px) {
+  .mapwrap { grid-template-columns: 1fr; }
+  #map { height: 55vh; min-height: 320px; }
+  #mapList { max-height: none; }
+}

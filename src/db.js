@@ -145,7 +145,7 @@ for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 const productCols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
 if (!productCols.includes('featured')) db.exec('ALTER TABLE products ADD COLUMN featured INTEGER NOT NULL DEFAULT 0');
 const orderCols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
-for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER'], ['delivery_km', 'REAL'], ['fee_extra', 'INTEGER NOT NULL DEFAULT 0'], ['fee_paid', 'INTEGER NOT NULL DEFAULT 0']]) {
+for (const [c, def] of [['delivery_mode', "TEXT NOT NULL DEFAULT 'retirada'"], ['bairro', 'TEXT'], ['address', 'TEXT'], ['address_ref', 'TEXT'], ['delivery_fee_cents', 'INTEGER'], ['subtotal_cents', 'INTEGER'], ['delivery_km', 'REAL'], ['fee_extra', 'INTEGER NOT NULL DEFAULT 0'], ['fee_paid', 'INTEGER NOT NULL DEFAULT 0'], ['delivery_lat', 'REAL'], ['delivery_lng', 'REAL'], ['geo_precision', 'TEXT']]) {
   if (!orderCols.includes(c)) db.exec(`ALTER TABLE orders ADD COLUMN ${c} ${def}`);
 }
 if (!productCols.includes('badge')) db.exec("ALTER TABLE products ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
@@ -257,6 +257,19 @@ function deleteOrder(id) {
   if (o.receipt_path) { try { fs.unlinkSync(path.join(DATA_DIR, 'uploads', o.receipt_path)); } catch {} }
   return o;
 }
+
+/**
+ * Ponto do endereço no mapa (só para planejar rotas; nunca altera a taxa).
+ * precision: 'rua' | 'cep' | 'bairro' (aproximados) | 'manual' (corrigido no admin — nunca é sobrescrito automaticamente).
+ */
+function setDeliveryGeo(id, lat, lng, precision) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const guard = precision === 'manual' ? '' : " AND (geo_precision IS NULL OR geo_precision != 'manual')";
+  db.prepare(`UPDATE orders SET delivery_lat = ?, delivery_lng = ?, geo_precision = ? WHERE id = ? AND delivery_mode = 'entrega'${guard}`).run(lat, lng, precision || 'rua', id);
+  return getOrderById(id);
+}
+const ordersWithoutGeo = () =>
+  db.prepare("SELECT id FROM orders WHERE delivery_mode = 'entrega' AND delivery_lat IS NULL AND status != 'cancelado' ORDER BY id").all().map((r) => r.id);
 
 /** Pedidos de entrega ainda com taxa "a combinar". */
 const ordersWithoutFee = () =>
@@ -506,6 +519,8 @@ const markChatRead = (jid) => db.prepare('UPDATE wa_chats SET unread = 0 WHERE j
 const chatStates = () => Object.fromEntries(db.prepare('SELECT jid, human_status, unread FROM wa_chats').all().map((c) => [c.jid, c]));
 
 module.exports = {
+  setDeliveryGeo,
+  ordersWithoutGeo,
   deleteOrder,
   ordersWithoutFee,
   setLateFee,

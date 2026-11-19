@@ -298,3 +298,28 @@ test('endereço no bot: busca de rua com várias opções, CEP inválido e CEP d
   assert.strictEqual(d.ref, 'apto 102');
   await inbound('3');
 });
+
+test('mapa: ponto salvo na criação, ponto manual nunca é sobrescrito e a taxa não muda', async () => {
+  const d = await geo.priceDelivery({ address: 'Rua Golfo de Lion, 120', bairro: 'Manaíra', cep: '58037030' });
+  assert.ok(Number.isFinite(d.lat) && Number.isFinite(d.lng));
+  const o = store.createOrder({ customer_name: 'Mapa', phone: '83990001111', items: [{ product_id: 1, qty: 1 }], source: 'site', delivery: d });
+  let x = store.setDeliveryGeo(o.id, d.lat, d.lng, d.precision);
+  assert.strictEqual(x.delivery_lat, d.lat);
+  assert.notStrictEqual(x.geo_precision, 'manual');
+  const fee = x.delivery_fee_cents, total = x.total_cents;
+  x = store.setDeliveryGeo(o.id, -7.0999, -34.8111, 'manual');
+  assert.strictEqual(x.geo_precision, 'manual');
+  x = store.setDeliveryGeo(o.id, -7.5, -34.9, 'rua'); // automático depois do manual: ignorado
+  assert.strictEqual(x.delivery_lat, -7.0999);
+  assert.strictEqual(x.delivery_fee_cents, fee);
+  assert.strictEqual(x.total_cents, total);
+  // pedido antigo sem ponto: localizado pelo endereço salvo (com "— CEP ...")
+  const old = store.createOrder({ customer_name: 'Antigo', phone: '83990002222', items: [{ product_id: 1, qty: 1 }], source: 'site', delivery: { mode: 'entrega', address: 'Rua Golfo de Lion, 50', bairro: 'Manaíra', cep: '58037030', fee_cents: 600 } });
+  assert.ok(store.ordersWithoutGeo().includes(old.id));
+  const r = await geo.locateOrder(store.getOrderById(old.id));
+  assert.ok(r && Number.isFinite(r.lat));
+  // retirada nunca recebe ponto
+  const ret = store.createOrder({ customer_name: 'Ret', phone: '83990003333', items: [{ product_id: 1, qty: 1 }], source: 'site' });
+  store.setDeliveryGeo(ret.id, -7.1, -34.8, 'manual');
+  assert.strictEqual(store.getOrderById(ret.id).delivery_lat, null);
+});

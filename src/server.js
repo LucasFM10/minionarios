@@ -173,6 +173,7 @@ app.post('/api/orders', rateLimit(10, 10 * 60000), upload.single('receipt'), asy
       delivery,
       source: 'site',
     });
+    if (delivery && delivery.lat != null) { try { store.setDeliveryGeo(order.id, delivery.lat, delivery.lng, delivery.precision); } catch (e) { console.error('[geo] ponto do pedido:', e.message); } }
     if (req.file) {
       const rel = saveUpload(req.file, 'receipts', String(order.id));
       order = store.attachReceipt(order.id, rel, req.file.mimetype);
@@ -269,6 +270,56 @@ app.post('/api/admin/delivery/test', requireAdmin, async (req, res) => {
   res.json({ km: d.km, fee_cents: d.fee_cents, too_far: !!d.too_far, approx: d.approx, precision: d.precision || null, origin: s2.pickup_lat ? { lat: s2.pickup_lat, lng: s2.pickup_lng } : null, pickup_address: s.pickup_address, trace });
 });
 
+// ---------- Mapa de entregas (planejar rotas) ----------
+app.get('/api/admin/map', requireAdmin, (req, res) => {
+  const s = store.getSettings();
+  const orders = store
+    .listOrders()
+    .filter((o) => o.delivery_mode === 'entrega' && o.status !== 'cancelado')
+    .map((o) => ({
+      id: o.id, number_label: o.number_label, customer_name: o.customer_name, phone: o.phone, status: o.status, status_info: o.status_info,
+      address: o.address, address_ref: o.address_ref, bairro: o.bairro, delivery_km: o.delivery_km, notes: o.notes,
+      items: o.items.map((l) => `${l.qty}x ${l.name}`).join(', '),
+      lat: o.delivery_lat, lng: o.delivery_lng, precision: o.geo_precision,
+    }));
+  const lat = parseFloat(s.pickup_lat), lng = parseFloat(s.pickup_lng);
+  res.json({ pickup: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, address: s.pickup_address } : null, orders, missing: store.ordersWithoutGeo().length });
+});
+// Localiza (aproximado) os pedidos de entrega ainda sem ponto no mapa. Não mexe em taxa nem em pontos corrigidos à mão.
+let locating = false;
+app.post('/api/admin/map/locate', requireAdmin, async (req, res) => {
+  if (locating) return res.json({ busy: true, located: 0, missing: store.ordersWithoutGeo().length });
+  locating = true;
+  let located = 0;
+  const started = Date.now();
+  try {
+    for (const id of store.ordersWithoutGeo()) {
+      if (Date.now() - started > 20000) break; // responde em até ~20 s; o resto fica para a próxima chamada
+      const o = store.getOrderById(id);
+      try {
+        const r = await geo.locateOrder(o);
+        if (r) { store.setDeliveryGeo(id, r.lat, r.lng, r.precision); located++; }
+      } catch (e) { console.error('[geo] mapa:', e.message); }
+    }
+  } finally { locating = false; }
+  res.json({ located, missing: store.ordersWithoutGeo().length });
+});
+// Ponto exato informado à mão (lat/lng). reset=true volta para o ponto aproximado automático.
+app.patch('/api/admin/orders/:id/geo', requireAdmin, async (req, res) => {
+  const o = store.getOrderById(req.params.id);
+  if (!o || o.delivery_mode !== 'entrega') return res.status(400).json({ error: 'Pedido sem entrega.' });
+  if (req.body.reset) {
+    store.db.prepare('UPDATE orders SET delivery_lat = NULL, delivery_lng = NULL, geo_precision = NULL WHERE id = ?').run(o.id);
+    const r = await geo.locateOrder(o).catch(() => null);
+    if (r) store.setDeliveryGeo(o.id, r.lat, r.lng, r.precision);
+    return res.json({ order: store.getOrderById(o.id) });
+  }
+  const lat = parseFloat(req.body.lat), lng = parseFloat(req.body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return res.status(400).json({ error: 'Latitude/longitude inválidas.' });
+  if (lat < -7.8 || lat > -6.5 || lng < -35.4 || lng > -34.5) return res.status(400).json({ error: 'Esse ponto fica fora da região de João Pessoa. Confira se a latitude (≈ -7,1) e a longitude (≈ -34,8) não estão invertidas.' });
+  res.json({ order: store.setDeliveryGeo(o.id, lat, lng, 'manual') });
+});
+
 app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
   const o = store.deleteOrder(req.params.id);
   if (!o) return res.status(404).json({ error: 'Não encontrado' });
@@ -290,6 +341,7 @@ app.post('/api/admin/orders/:id/fee', requireAdmin, async (req, res) => {
     const d = await geo.priceDelivery({ address: o.address, bairro: o.bairro });
     if (d.too_far) return res.json({ order: o, too_far: true, km: d.km, max_km: d.max_km });
     if (d.fee_cents == null) return res.status(400).json({ error: 'Não consegui localizar o endereço no mapa. Informe o valor manualmente.' });
+    if (d.lat != null) store.setDeliveryGeo(o.id, d.lat, d.lng, d.precision);
     res.json({ order: store.setLateFee(o.id, d.fee_cents, d.km) });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -529,6 +581,7 @@ async function backfillFees() {
     try {
       const o = store.getOrderById(id);
       const d = await geo.priceDelivery({ address: o.address, bairro: o.bairro });
+      if (d.lat != null) store.setDeliveryGeo(id, d.lat, d.lng, d.precision);
       if (d.fee_cents != null) { store.setLateFee(id, d.fee_cents, d.km); console.log(`[taxa] pedido #${o.number_label}: ${d.km} km → ${d.fee_cents}`); }
       else if (d.too_far) console.log(`[taxa] pedido #${o.number_label}: ${d.km} km, fora da área`);
     } catch (e) { console.error('[taxa]', e.message); }

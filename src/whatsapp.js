@@ -591,6 +591,8 @@ async function handleMessage(data) {
           source: 'whatsapp',
           wa_jid: jid,
         });
+        const dv = session.data.delivery;
+        if (dv && dv.lat != null) { try { store.setDeliveryGeo(order.id, dv.lat, dv.lng, dv.precision); } catch (e) { console.error('[geo] ponto do pedido:', e.message); } }
         store.saveSession(jid, 'receipt', { order_id: order.id });
         try {
           return await sendPix(jid, order, s);
